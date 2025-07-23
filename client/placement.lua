@@ -1,48 +1,192 @@
+local RSGCore = exports['rsg-core']:GetCoreObject()
+
+-- Variáveis globais do sistema de placement
 local PlacementMode = false
 local PreviewObject = nil
 local ActiveChests = {}
+local confirmed = false
+local heading = 0.0
 
-local function RequestAndLoadAnimDict(dict)
-    if not HasAnimDictLoaded(dict) then
-        RequestAnimDict(dict)
-        local attempts = 0
-        local maxAttempts = 100
-        
-        while not HasAnimDictLoaded(dict) and attempts < maxAttempts do
-            Wait(10)
-            attempts = attempts + 1
-        end
-        
-        if attempts >= maxAttempts then
-            print(('[RSG-CHEST][ERROR] Falha ao carregar animação: %s'):format(dict))
-            return false
-        end
+-- Sistema de prompts nativo do RedM
+local PromptPlacerGroup = GetRandomIntInRange(0, 0xffffff)
+local SetPrompt, CancelPrompt, RotateLeftPrompt, RotateRightPrompt
+
+-- =================================================================
+-- FUNÇÕES DE CONTROLE DE PROMPTS NATIVOS
+-- =================================================================
+
+-- Criar prompts de controle na inicialização
+CreateThread(function()
+    CreateSetPrompt()
+    CreateCancelPrompt()
+    CreateRotateLeftPrompt()
+    CreateRotateRightPrompt()
+end)
+
+function CreateSetPrompt()
+    CreateThread(function()
+        local str = 'Confirmar Posição'
+        SetPrompt = PromptRegisterBegin()
+        PromptSetControlAction(SetPrompt, 0xC7B5340A) -- ENTER
+        str = CreateVarString(10, 'LITERAL_STRING', str)
+        PromptSetText(SetPrompt, str)
+        PromptSetEnabled(SetPrompt, true)
+        PromptSetVisible(SetPrompt, true)
+        PromptSetHoldMode(SetPrompt, true)
+        PromptSetGroup(SetPrompt, PromptPlacerGroup)
+        PromptRegisterEnd(SetPrompt)
+    end)
+end
+
+function CreateCancelPrompt()
+    CreateThread(function()
+        local str = 'Cancelar'
+        CancelPrompt = PromptRegisterBegin()
+        PromptSetControlAction(CancelPrompt, 0x156F7119) -- BOTÃO DIREITO DO MOUSE
+        str = CreateVarString(10, 'LITERAL_STRING', str)
+        PromptSetText(CancelPrompt, str)
+        PromptSetEnabled(CancelPrompt, true)
+        PromptSetVisible(CancelPrompt, true)
+        PromptSetHoldMode(CancelPrompt, true)
+        PromptSetGroup(CancelPrompt, PromptPlacerGroup)
+        PromptRegisterEnd(CancelPrompt)
+    end)
+end
+
+function CreateRotateLeftPrompt()
+    CreateThread(function()
+        local str = 'Girar para Esquerda'
+        RotateLeftPrompt = PromptRegisterBegin()
+        PromptSetControlAction(RotateLeftPrompt, 0xA65EBAB4) -- LEFT ARROW
+        str = CreateVarString(10, 'LITERAL_STRING', str)
+        PromptSetText(RotateLeftPrompt, str)
+        PromptSetEnabled(RotateLeftPrompt, true)
+        PromptSetVisible(RotateLeftPrompt, true)
+        PromptSetStandardMode(RotateLeftPrompt, true)
+        PromptSetGroup(RotateLeftPrompt, PromptPlacerGroup)
+        PromptRegisterEnd(RotateLeftPrompt)
+    end)
+end
+
+function CreateRotateRightPrompt()
+    CreateThread(function()
+        local str = 'Girar para Direita'
+        RotateRightPrompt = PromptRegisterBegin()
+        PromptSetControlAction(RotateRightPrompt, 0xDEB34313) -- RIGHT ARROW
+        str = CreateVarString(10, 'LITERAL_STRING', str)
+        PromptSetText(RotateRightPrompt, str)
+        PromptSetEnabled(RotateRightPrompt, true)
+        PromptSetVisible(RotateRightPrompt, true)
+        PromptSetStandardMode(RotateRightPrompt, true)
+        PromptSetGroup(RotateRightPrompt, PromptPlacerGroup)
+        PromptRegisterEnd(RotateRightPrompt)
+    end)
+end
+
+-- =================================================================
+-- FUNÇÕES AUXILIARES DE RAYCAST E VISUALIZAÇÃO MELHORADAS
+-- =================================================================
+
+function RotationToDirection(rotation)
+    local adjustedRotation = {
+        x = (math.pi / 180) * rotation.x,
+        y = (math.pi / 180) * rotation.y,
+        z = (math.pi / 180) * rotation.z
+    }
+    local direction = {
+        x = -math.sin(adjustedRotation.z) * math.abs(math.cos(adjustedRotation.x)),
+        y = math.cos(adjustedRotation.z) * math.abs(math.cos(adjustedRotation.x)),
+        z = math.sin(adjustedRotation.x)
+    }
+    return direction
+end
+
+-- ✅ NOVA FUNÇÃO: Texto 3D Melhorado com Cores
+function DrawText3D(coords, text, color)
+    local onScreen, _x, _y = GetScreenCoordFromWorldCoord(coords.x, coords.y, coords.z + 1.0)
+    local camCoords = GetGameplayCamCoord()
+    local distance = #(camCoords - coords)
+    local scale = (1 / distance) * 2
+    local fov = (1 / GetGameplayCamFov()) * 100
+    scale = scale * fov
+    
+    if onScreen then
+        SetTextScale(0.0 * scale, 0.35 * scale)
+        SetTextFontForCurrentCommand(6)
+        SetTextColor(color.r, color.g, color.b, color.a)
+        SetTextCentre(true)
+        DisplayText(CreateVarString(10, "LITERAL_STRING", text), _x, _y)
     end
-    return true
 end
 
-local function DrawText3D(x, y, z, text)
-    SetDrawOrigin(x, y, z, 0)
-    SetTextScale(0.35, 0.35)
-    SetTextFontForCurrentCommand(6)
-    SetTextColor(255, 255, 255, 215)
-    SetTextCentre(true)
-    DisplayText(CreateVarString(10, "LITERAL_STRING", text), 0.0, 0.0)
-    ClearDrawOrigin()
+-- ✅ MELHORADA: Função de eixos com cores baseadas na validade
+function DrawPropAxes(prop, isValid)
+    if not DoesEntityExist(prop) then return end
+    
+    local propForward, propRight, propUp, propCoords = GetEntityMatrix(prop)
+    
+    -- Cores baseadas na validade
+    local axisIntensity = isValid and 255 or 150
+    local mainColor = isValid and {0, 255, 0} or {255, 0, 0} -- Verde válido, Vermelho inválido
+    
+    -- Eixos de visualização
+    local propXAxisEnd = propCoords + propRight * 1.5
+    local propYAxisEnd = propCoords + propForward * 1.5
+    local propZAxisEnd = propCoords + propUp * 1.5
+    
+    -- Desenhar linhas dos eixos com cores da validade
+    DrawLine(propCoords.x, propCoords.y, propCoords.z + 0.1, propXAxisEnd.x, propXAxisEnd.y, propXAxisEnd.z, 
+             mainColor[1], mainColor[2], mainColor[3], axisIntensity)
+    DrawLine(propCoords.x, propCoords.y, propCoords.z + 0.1, propYAxisEnd.x, propYAxisEnd.y, propYAxisEnd.z, 
+             mainColor[1], mainColor[2], mainColor[3], axisIntensity)
+    DrawLine(propCoords.x, propCoords.y, propCoords.z + 0.1, propZAxisEnd.x, propZAxisEnd.y, propZAxisEnd.z, 
+             mainColor[1], mainColor[2], mainColor[3], axisIntensity)
 end
 
-local function RayCastGamePlayCamera(distance)
-    local camRot = GetGameplayCamRot()
-    local camCoord = GetGameplayCamCoord()
-    local dir = vector3(
-        -math.sin(math.rad(camRot.z)) * math.abs(math.cos(math.rad(camRot.x))),
-        math.cos(math.rad(camRot.z)) * math.abs(math.cos(math.rad(camRot.x))),
-        math.sin(math.rad(camRot.x))
-    )
-    local dest = camCoord + dir * distance
-    local ray = StartShapeTestRay(camCoord.x, camCoord.y, camCoord.z, dest.x, dest.y, dest.z, -1, PlayerPedId(), 0)
-    local _, hit, endCoords = GetShapeTestResult(ray)
-    return hit, endCoords
+-- ✅ NOVA FUNÇÃO: Círculo no chão para indicar área de influência
+function DrawGroundCircle(coords, radius, isValid)
+    local color = isValid and {0, 255, 0, 100} or {255, 0, 0, 100}
+    
+    -- Desenhar círculo no chão com múltiplas linhas
+    local segments = 32
+    local lastX, lastY = nil, nil
+    
+    for i = 0, segments do
+        local angle = (i / segments) * (2 * math.pi)
+        local x = coords.x + math.cos(angle) * radius
+        local y = coords.y + math.sin(angle) * radius
+        local z = coords.z + 0.05
+        
+        if lastX and lastY then
+            DrawLine(lastX, lastY, z, x, y, z, color[1], color[2], color[3], color[4])
+        end
+        
+        lastX, lastY = x, y
+    end
+end
+
+-- ✅ NOVA FUNÇÃO: Efeito de "pulso" visual
+function DrawValidationPulse(coords, isValid, gameTime)
+    local pulseIntensity = math.abs(math.sin(gameTime * 0.005)) * 0.5 + 0.5
+    local color = isValid and {0, 255, 0} or {255, 0, 0}
+    local alpha = math.floor(pulseIntensity * 150)
+    
+    -- Desenhar esferas de diferentes tamanhos para criar efeito de pulso
+    DrawMarker(28, coords.x, coords.y, coords.z + 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+               0.5, 0.5, 0.5, color[1], color[2], color[3], alpha, false, true, 2, false, nil, nil, false)
+end
+
+function RayCastGamePlayCamera(distance)
+    local cameraRotation = GetGameplayCamRot()
+    local cameraCoord = GetGameplayCamCoord()
+    local direction = RotationToDirection(cameraRotation)
+    local destination = {
+        x = cameraCoord.x + direction.x * distance,
+        y = cameraCoord.y + direction.y * distance,
+        z = cameraCoord.z + direction.z * distance
+    }
+    local a, b, c, d, e = GetShapeTestResult(StartShapeTestRay(cameraCoord.x, cameraCoord.y, cameraCoord.z, destination.x, destination.y, destination.z, -1, PlayerPedId(), 0))
+    return b, c, e
 end
 
 local function GetGroundZ(coords)
@@ -65,10 +209,18 @@ local function RequestModelSafe(model, timeout)
     return true
 end
 
+-- =================================================================
+-- FUNÇÕES PRINCIPAIS DE PLACEMENT COM FEEDBACK VISUAL
+-- =================================================================
+
 function StartPlacementMode()
     if PlacementMode then return end
 
     PlacementMode = true
+    confirmed = false
+    heading = 0.0
+    
+    -- Solicita lista de baús ativos para validação
     TriggerServerEvent('rsg-chest:server:getActiveChests')
 
     local propModel = joaat(Config.ChestProp)
@@ -79,72 +231,127 @@ function StartPlacementMode()
         return
     end
 
-    local _, coords = RayCastGamePlayCamera(Config.PlacementDistance)
-    if not coords then
+    -- Raycast inicial para posição
+    local hit, coords, entity = RayCastGamePlayCamera(Config.PlacementDistance or 1000.0)
+    
+    if not hit or not coords then
         lib.notify({ title = 'Erro', description = 'Mire para um local válido.', type = 'error' })
         PlacementMode = false
         SetModelAsNoLongerNeeded(propModel)
         return
     end
 
-    PreviewObject = CreateObject(propModel, coords, false, false, false)
-    SetEntityAlpha(PreviewObject, 180, false)
+    -- Ajustar coordenadas ao chão
+    local groundZ = GetGroundZ(coords)
+    coords = vector3(coords.x, coords.y, groundZ)
+
+    -- Criar objeto de preview
+    PreviewObject = CreateObject(propModel, coords.x, coords.y, coords.z, true, false, true)
+    SetEntityAlpha(PreviewObject, 150, false)
     SetEntityCollision(PreviewObject, false, false)
     FreezeEntityPosition(PreviewObject, true)
 
-    local heading = GetEntityHeading(PlayerPedId())
-
+    -- Thread principal de placement com feedback visual aprimorado
     CreateThread(function()
-        while PlacementMode do
-            Wait(0)
-
-            local currentHit, currentCoords = RayCastGamePlayCamera(Config.PlacementDistance)
-            if currentHit and DoesEntityExist(PreviewObject) then
-                local groundZ = GetGroundZ(currentCoords)
-                SetEntityCoordsNoOffset(PreviewObject, currentCoords.x, currentCoords.y, groundZ, false, false, false, true)
+        while PlacementMode and not confirmed do
+            local hit, coords, entity = RayCastGamePlayCamera(Config.PlacementDistance or 1000.0)
+            local gameTime = GetGameTimer()
+            
+            if hit and coords and DoesEntityExist(PreviewObject) then
+                local groundZ = GetGroundZ(coords)
+                local finalCoords = vector3(coords.x, coords.y, groundZ)
+                
+                SetEntityCoordsNoOffset(PreviewObject, coords.x, coords.y, groundZ, false, false, false, true)
                 SetEntityHeading(PreviewObject, heading)
-
-                local isValid = IsValidPlacement(vector3(
-                    tonumber(string.format("%.2f", currentCoords.x)),
-                    tonumber(string.format("%.2f", currentCoords.y)),
+                
+                -- Validar se a posição é válida
+                local normalizedCoords = vector3(
+                    tonumber(string.format("%.2f", coords.x)),
+                    tonumber(string.format("%.2f", coords.y)),
                     tonumber(string.format("%.2f", groundZ))
-                ))
-
-                SetEntityAlpha(PreviewObject, isValid and 220 or 100, false)
-
-                local helpText = "~y~Posicione seu baú~s~\n~b~← →~s~ Girar\n"
-                helpText = helpText .. (isValid and "~g~ENTER~s~ Confirmar" or "~r~Local Inválido")
-                helpText = helpText .. "\n~r~BACKSPACE~s~ Cancelar"
-
-                DrawText3D(currentCoords.x, currentCoords.y, groundZ + 0.5, helpText)
-
-                if IsControlPressed(0, 0xA65EBAB4) then heading = (heading + 1) % 360.0 end
-                if IsControlPressed(0, 0xDEB34313) then heading = (heading - 1 + 360.0) % 360.0 end
-
-                if IsControlJustPressed(0, 0xC7B5340A) and isValid then
-                    PlaceChest(vector3(
-                        tonumber(string.format("%.2f", GetEntityCoords(PreviewObject).x)),
-                        tonumber(string.format("%.2f", GetEntityCoords(PreviewObject).y)),
-                        tonumber(string.format("%.2f", GetEntityCoords(PreviewObject).z))
-                    ), heading)
+                )
+                
+                local isValid = IsValidPlacement(normalizedCoords)
+                
+                -- ✅ FEEDBACK VISUAL MELHORADO
+                -- 1. Transparência e cor do objeto
+                if isValid then
+                    SetEntityAlpha(PreviewObject, 220, false)
+                    -- Aplicar cor verde (válido)
+                    SetEntityProofs(PreviewObject, false, false, false, false, false, false, 0, false)
+                else
+                    SetEntityAlpha(PreviewObject, 120, false)
+                    -- Aplicar cor vermelha (inválido) - usando alpha diferente para simular cor
+                end
+                
+                -- 2. Desenhar eixos com cores da validade
+                DrawPropAxes(PreviewObject, isValid)
+                
+                -- 3. Círculo no chão indicando área
+                DrawGroundCircle(finalCoords, Config.MaxDistance or 2.0, isValid)
+                
+                -- 4. Efeito de pulso visual
+                DrawValidationPulse(finalCoords, isValid, gameTime)
+                
+                -- 5. Texto 3D indicando status
+                local statusText = isValid and "~g~LOCAL VÁLIDO~s~" or "~r~LOCAL INVÁLIDO~s~"
+                local textColor = isValid and {r = 0, g = 255, b = 0, a = 255} or {r = 255, g = 0, b = 0, a = 255}
+                DrawText3D(finalCoords, statusText, textColor)
+                
+                -- 6. Texto adicional com instruções
+                local instructionText = isValid and "~g~ENTER~s~ Confirmar | " or "~r~Mova para local válido~s~ | "
+                instructionText = instructionText .. "~b~← →~s~ Girar | ~r~Botão Direito~s~ Cancelar"
+                DrawText3D(vector3(finalCoords.x, finalCoords.y, finalCoords.z + 0.5), instructionText, {r = 255, g = 255, b = 255, a = 200})
+                
+                -- Mostrar prompts nativos
+                local PropPlacerGroupName = CreateVarString(10, 'LITERAL_STRING', 'Posicionar Baú')
+                PromptSetActiveGroupThisFrame(PromptPlacerGroup, PropPlacerGroupName)
+                
+                -- Controle de rotação
+                if IsControlPressed(1, 0xA65EBAB4) then -- Seta esquerda
+                    heading = heading + 1.0
+                    if heading > 360.0 then heading = 0.0 end
+                elseif IsControlPressed(1, 0xDEB34313) then -- Seta direita
+                    heading = heading - 1.0
+                    if heading < 0.0 then heading = 360.0 end
+                end
+                
+                -- Confirmar posição
+                if PromptHasHoldModeCompleted(SetPrompt) and isValid then
+                    confirmed = true
+                    PlaceChest(normalizedCoords, heading)
+                    break
+                elseif PromptHasHoldModeCompleted(SetPrompt) and not isValid then
+                    lib.notify({ 
+                        title = 'Local Inválido', 
+                        description = 'Não é possível colocar o baú neste local. Muito próximo de outro baú.', 
+                        type = 'error' 
+                    })
+                end
+                
+                -- Cancelar placement
+                if PromptHasHoldModeCompleted(CancelPrompt) then
+                    CancelPlacement()
                     break
                 end
             else
-                DrawText3D(GetEntityCoords(PlayerPedId()).x, GetEntityCoords(PlayerPedId()).y, GetEntityCoords(PlayerPedId()).z + 1.0, "~r~Mire em um local válido.")
+                -- Feedback quando não está mirando em local válido
+                local playerCoords = GetEntityCoords(PlayerPedId())
+                DrawText3D(vector3(playerCoords.x, playerCoords.y, playerCoords.z + 2.0), 
+                          "~r~Mire para um local válido~s~", 
+                          {r = 255, g = 0, b = 0, a = 255})
             end
-
-            if IsControlJustPressed(0, 0x156F7119) then
-                CancelPlacement()
-                break
-            end
+            
+            Wait(0)
         end
-
-        PlacementMode = false
-        if DoesEntityExist(PreviewObject) then 
-            DeleteEntity(PreviewObject)
-            PreviewObject = nil 
+        
+        -- Cleanup
+        if DoesEntityExist(PreviewObject) then
+            DeleteObject(PreviewObject)
+            PreviewObject = nil
         end
         SetModelAsNoLongerNeeded(propModel)
+        PlacementMode = false
     end)
 end
 
@@ -158,7 +365,7 @@ function IsValidPlacement(coords)
             tonumber(string.format("%.2f", chestCoords.z))
         )
 
-        if #(coords - vChest) < Config.MaxDistance then
+        if #(coords - vChest) < (Config.MaxDistance or 2.0) then
             return false
         end
     end
@@ -182,7 +389,7 @@ function PlaceChest(coords, heading)
     Wait(500)
 
     -- Som de martelada com controle de duração
-    local duration = Config.PlacementTime
+    local duration = Config.PlacementTime or 3000
     local interval = 900
     local elapsed = 0
 
@@ -196,7 +403,7 @@ function PlaceChest(coords, heading)
 
     local success = lib.progressBar({
         duration = duration,
-        label = Config.Lang['placing_chest'],
+        label = Config.Lang['placing_chest'] or 'Colocando baú...',
         useWhileDead = false,
         canCancel = true,
         disable = {
@@ -223,17 +430,47 @@ end
 
 function CancelPlacement()
     PlacementMode = false
-    lib.notify({ title = 'Cancelado', description = Config.Lang['placement_cancelled'], type = 'inform' })
+    confirmed = false
+    
+    lib.notify({ 
+        title = 'Cancelado', 
+        description = Config.Lang['placement_cancelled'] or 'Colocação do baú cancelada.', 
+        type = 'inform' 
+    })
+    
     local ped = PlayerPedId()
     if ped then
         FreezeEntityPosition(ped, false)
         ClearPedTasks(ped)
     end
+    
+    if DoesEntityExist(PreviewObject) then
+        DeleteObject(PreviewObject)
+        PreviewObject = nil
+    end
 end
+
+-- =================================================================
+-- EVENT HANDLERS
+-- =================================================================
 
 RegisterNetEvent('rsg-chest:client:receiveActiveChests', function(chests)
     ActiveChests = {}
     for _, chest in pairs(chests) do
         table.insert(ActiveChests, chest.coords)
+    end
+end)
+
+-- =================================================================
+-- CLEANUP E SEGURANÇA
+-- =================================================================
+
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() == resourceName then
+        if DoesEntityExist(PreviewObject) then
+            DeleteObject(PreviewObject)
+        end
+        PlacementMode = false
+        confirmed = false
     end
 end)

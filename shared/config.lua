@@ -6,7 +6,7 @@ Config.ChestProp = 'p_chest01x'
 Config.MaxDistance = 2.0
 Config.PlacementDistance = 5.0
 Config.ShareDistance = 5.0 -- Distância máxima em metros para poder compartilhar.
-Config.UpgradeItem = 'chest_upgrade_kit'-- 'chest_upgrade_kit' -- Item usado para melhorar o baú.
+Config.UpgradeItem = 'canteen0'-- 'chest_upgrade_kit' -- Item usado para melhorar o baú.
 Config.LockpickItem = 'lockpick'          -- Item usado para tentar arrombar baús.
 Config.Tiers = {
     -- Nível 1 (Padrão)
@@ -162,6 +162,18 @@ Config.Lang = {
     ['admin_action_lockpick_desc'] = 'Registrar uma Tentativa de Saquear Baú no baú.',
     ['admin_lockpick_success'] = 'Arrombamento registrado com sucesso!',
     ['admin_lockpick_fail'] = 'Falha ao registrar o arrombamento. Verifique os dados.',
+
+    ['placing_chest'] = 'Colocando baú...',
+    ['placement_cancelled'] = 'Colocação do baú cancelada.',
+    ['invalid_location'] = 'Local inválido para colocar o baú.',
+    ['chest_placed'] = 'Baú colocado com sucesso!',
+    
+    -- Prompts
+    ['prompt_confirm'] = 'Confirmar Posição',
+    ['prompt_cancel'] = 'Cancelar',
+    ['prompt_rotate_left'] = 'Girar Esquerda',
+    ['prompt_rotate_right'] = 'Girar Direita',
+    ['prompt_group_name'] = 'Posicionar Baú',
 }
 
     
