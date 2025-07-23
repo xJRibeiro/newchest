@@ -392,10 +392,10 @@ RegisterNetEvent('jx:chest:requestPlayerLogs', function(chestUUID)
             actionDescription = 'Melhoria do Baú'
         elseif log.action_type == 'LOCKPICK_SUCCESS' then
             actionIcon = '🔓'
-            actionDescription = 'Arrombamento (Sucesso)'
+            actionDescription = 'Baú saqueado!'
         elseif log.action_type == 'LOCKPICK_FAIL' then
             actionIcon = '🔒'
-            actionDescription = 'Tentativa de Arrombamento'
+            actionDescription = 'Tentativa de Saquear Baú'
         end
         
         table.insert(processedLogs, {
@@ -492,6 +492,10 @@ RegisterNetEvent('jx:chest:updateSharedList', function(chestUUID, newSharedList)
     end
 end)
 
+-- =================================================================
+-- SISTEMA DE LOCKPICK USANDO RSG-LOCKPICK
+-- =================================================================
+
 RegisterNetEvent('jx:chest:startSkillCheck', function(chestUUID)
     local playerPed = PlayerPedId()
     
@@ -500,8 +504,7 @@ RegisterNetEvent('jx:chest:startSkillCheck', function(chestUUID)
         return
     end
     
-    local rounds = Config.LockpickSettings.SkillCheck.Rounds
-    local keys = Config.LockpickSettings.SkillCheck.Keys
+    -- Animação de lockpick
     local animDict = "script_re@bear_trap"
     local animClip = "action_loot_player"
     
@@ -519,30 +522,36 @@ RegisterNetEvent('jx:chest:startSkillCheck', function(chestUUID)
         end
     end
     
+    -- Inicia animação
     TaskPlayAnim(playerPed, animDict, animClip, 8.0, -8.0, -1, 1, 0, false, false, false)
     
-    -- Skill check com timeout
-    local function onComplete(success)
+    -- RSG-Lockpick inicia o lockpick
+    CreateThread(function()
+        local success = exports['rsg-lockpick']:start()
+        
+        -- Para a animação
         StopAnimTask(playerPed, animDict, animClip, 1.0)
         
+        -- Processa o resultado
         if success then
-            lib.notify({ type = 'success', title = 'Sucesso', description = 'Você arrombou o baú!' })
+            lib.notify({ 
+                type = 'success', 
+                title = 'Sucesso', 
+                description = Config.LockpickSettings.SuccessMessage or 'Você conseguiu arrombar o baú!' 
+            })
         else
-            lib.notify({ type = 'error', title = 'Falha no Arrombamento', description = 'Você quebrou seu lockpick.' })
+            lib.notify({ 
+                type = 'error', 
+                title = 'Falhou', 
+                description = Config.LockpickSettings.FailMessage or 'Você falhou em arrombar o baú e quebrou seu lockpick.' 
+            })
         end
         
+        -- Envia resultado para o servidor
         TriggerServerEvent('jx:chest:resolveLockpick', chestUUID, success)
-    end
-    
-    -- Timeout de segurança para o skill check
-    CreateThread(function()
-        Wait(30000) -- 30 segundos timeout
-        StopAnimTask(playerPed, animDict, animClip, 1.0)
     end)
-    
-    local skillCheckKeys = (keys and #keys > 0) and keys or nil
-    lib.skillCheck(rounds, skillCheckKeys, onComplete)
 end)
+
 
 RegisterNetEvent('rsg-chest:client:startPlacement', function() 
     if not _G.PlacementMode then StartPlacementMode() end 

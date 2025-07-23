@@ -18,19 +18,19 @@ Config.Tiers = {
 }
 
 Config.LockpickSettings = {
-    Cooldown = 60, -- Tempo em segundos que um jogador deve esperar após uma falha.
-    PoliceAlert = false, -- Se true, um alerta será enviado para a polícia em caso de sucesso.
-
-    -- Configurações do minigame de skill check do ox_lib
-    SkillCheck = {
+    Cooldown = 0, -- Tempo em segundos que um jogador deve esperar após uma falha
+    PoliceAlert = false, -- Se true, um alerta será enviado para a polícia em caso de sucesso
     
-        Rounds = {'easy', 'easy', 'easy', 'easy'},
-        --Rounds = {'easy', 'medium', 'hard', 'hard'},
-        -- Define as teclas a serem usadas. Deixe a tabela vazia {} para usar a tecla padrão (E).
-        --Keys = {'w', 'a', 's', 'd'}
-        Keys = {'e'}
-    }
+    -- Configurações de notificação
+    SuccessMessage = 'Você conseguiu arrombar o baú!',
+    FailMessage = 'Você falhou em arrombar o baú e quebrou seu lockpick.',
+    CooldownMessage = 'Você precisa esperar um pouco antes de tentar arrombar outro baú.',
+    
+    -- Configurações de experiência (opcional)
+    SuccessSound = 'success_sound', -- Som customizado para sucesso
+    FailSound = 'fail_sound', -- Som customizado para falha
 }
+
 -- Configurações do Inventário
 Config.ChestSlots = 50
 Config.ChestWeight = 100000
@@ -157,6 +157,11 @@ Config.Lang = {
     ['invalid_name_length'] = 'O nome deve ter entre 3 e 50 caracteres.',
     ['invalid_characters'] = 'O nome contém caracteres não permitidos.',
     ['rename_failed'] = 'Falha ao renomear o baú.',
+
+    ['admin_action_lockpick'] = 'Arrombamento',
+    ['admin_action_lockpick_desc'] = 'Registrar uma Tentativa de Saquear Baú no baú.',
+    ['admin_lockpick_success'] = 'Arrombamento registrado com sucesso!',
+    ['admin_lockpick_fail'] = 'Falha ao registrar o arrombamento. Verifique os dados.',
 }
 
     

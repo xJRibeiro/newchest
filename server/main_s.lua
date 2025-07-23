@@ -539,18 +539,30 @@ RegisterNetEvent('jx:chest:requestLockpick', function(chestUUID)
     
     if not Player or not chestUUID then return end
 
-    -- Validação de cooldown
+    -- Verifica cooldown
     if LockpickCooldowns[Player.PlayerData.citizenid] and os.time() < LockpickCooldowns[Player.PlayerData.citizenid] then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Aguarde', 
-            description = Config.Lang['lockpick_cooldown'] 
+            description = Config.LockpickSettings.CooldownMessage
+        })
+    end
+
+    -- Verifica se o baú existe
+    local chest = props[chestUUID]
+    if not chest then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Baú não encontrado.' 
         })
     end
 
     -- Validação de distância
-    local chest = props[chestUUID]
-    if chest and not ValidatePlayerDistance(src, chest.coords, 3.0) then
+    local playerCoords = GetEntityCoords(GetPlayerPed(src))
+    local chestCoords = vector3(chest.coords.x, chest.coords.y, chest.coords.z)
+    
+    if #(playerCoords - chestCoords) > 3.0 then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
@@ -558,19 +570,34 @@ RegisterNetEvent('jx:chest:requestLockpick', function(chestUUID)
         })
     end
 
-    -- Validação de item
-    if not ValidateItemExists(src, Config.LockpickItem, 1) then
+    -- Verifica se tem lockpick
+    local hasLockpick = exports['rsg-inventory']:GetItemByName(src, Config.LockpickItem)
+    if not hasLockpick or hasLockpick.amount < 1 then
+        local itemLabel = GetItemLabel(Config.LockpickItem)
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
-            description = ('Você não possui um %s.'):format(Config.LockpickItem) 
+            description = ('Você não possui um %s.'):format(itemLabel)
         })
     end
 
+    -- Remove o lockpick (será perdido em caso de falha)
     if exports['rsg-inventory']:RemoveItem(src, Config.LockpickItem, 1) then
+        -- Log da tentativa
+        Database.LogAction(chestUUID, '', 'LOCKPICK_ATTEMPT', chest.owner, 
+            'Iniciou Tentativa de Saquear Baú')
+        
+        -- Inicia o minigame de lockpick
         TriggerClientEvent('jx:chest:startSkillCheck', src, chestUUID)
+    else
+        TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Falha ao usar o lockpick.' 
+        })
     end
 end)
+
 
 RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
     local src = source
@@ -581,7 +608,10 @@ RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
     local chest = props[chestUUID]
 
     -- Validação de distância final
-    if not ValidatePlayerDistance(src, chest.coords, 3.0) then
+    local playerCoords = GetEntityCoords(GetPlayerPed(src))
+    local chestCoords = vector3(chest.coords.x, chest.coords.y, chest.coords.z)
+    
+    if #(playerCoords - chestCoords) > 3.0 then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
@@ -590,28 +620,35 @@ RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
     end
 
     if success then
-        Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'LOCKPICK_SUCCESS', chest.owner)
-        TemporaryAccess[chestUUID] = { citizenId = Player.PlayerData.citizenid, expires = os.time() + 120 }
+        -- ✅ SUCESSO NO LOCKPICK
+        Database.LogAction(chestUUID, '', 'LOCKPICK_SUCCESS', chest.owner, 
+            'Baú arrombado!')
+        
+        -- Concede acesso temporário
+        TemporaryAccess[chestUUID] = { 
+            citizenId = Player.PlayerData.citizenid, 
+            expires = os.time() + 120 -- 2 minutos de acesso
+        }
 
         -- Alerta à polícia
         if Config.LockpickSettings.PoliceAlert then
             local alertData = { 
                 title = "Arrombamento de Baú", 
                 coords = chest.coords, 
-                description = "Um baú foi arrombado.", 
+                description = "Um baú foi arrombado com sucesso usando lockpick.", 
                 sprite = 516, 
                 color = 1, 
                 scale = 1.2, 
-                duration = 3000 
+                duration = 5000 
             }
             TriggerClientEvent('rsg-dispatch:client:CreateAlert', -1, alertData, { 'police' })
         end
 
+        -- Abre o baú automaticamente
         local tierId = chest.tier or 1
         local tierData = Config.Tiers[tierId]
-
+        
         if not tierData then
-            print(('[RSG-CHEST][WARNING] Lockpick em baú %s com tier inválido (%s). Usando Nível 1 como padrão.'):format(chestUUID, tostring(chest.tier)))
             tierData = Config.Tiers[1]
         end
 
@@ -625,16 +662,24 @@ RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
 
         ChestUsers[chestUUID] = src
         TriggerClientEvent('chest:opened', src, chestUUID)
+
     else
-        Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'LOCKPICK_FAIL', chest.owner)
+        -- ❌ FALHA NO LOCKPICK
+        Database.LogAction(chestUUID, Player.PlayerData.ciudenid, 'LOCKPICK_FAIL', chest.owner,
+            'Falhou ao tentar arrombar o baú com rsg-lockpick')
+        
+        -- Aplica cooldown
         LockpickCooldowns[Player.PlayerData.citizenid] = os.time() + Config.LockpickSettings.Cooldown
+        
+        -- Lockpick já foi removido, não precisa fazer nada mais
         TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Falha', 
-            description = Config.Lang['lockpick_failed'] 
+            description = Config.LockpickSettings.FailMessage
         })
     end
 end)
+
 
 -- =================================================================
 -- EVENTO PARA RENOMEAR BAÚ
@@ -813,10 +858,10 @@ RegisterNetEvent('jx:chest:requestPlayerLogs', function(chestUUID)
             actionDescription = 'Melhoria do Baú'
         elseif log.action_type == 'LOCKPICK_SUCCESS' then
             actionIcon = '🔓'
-            actionDescription = 'Arrombamento (Sucesso)'
-        elseif log.action_type == 'LOCKPICK_FAIL' then
+            actionDescription = 'Bau saqueado!'
+        elseif log.action_type == 'LOCKPICK_ATTEMPT' then
             actionIcon = '🔒'
-            actionDescription = 'Tentativa de Arrombamento'
+            actionDescription = 'Tentativa de Saquear Baú'
         elseif log.action_type == 'RENAME' then
             actionIcon = '🏷️'
             actionDescription = 'Baú renomeado'
