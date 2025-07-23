@@ -6,7 +6,7 @@ Config.ChestProp = 'p_chest01x'
 Config.MaxDistance = 2.0
 Config.PlacementDistance = 5.0
 Config.ShareDistance = 5.0 -- Distância máxima em metros para poder compartilhar.
-Config.UpgradeItem = 'chest_upgrade_kit' -- Item usado para melhorar o baú.
+Config.UpgradeItem = 'canteen0'-- 'chest_upgrade_kit' -- Item usado para melhorar o baú.
 Config.LockpickItem = 'lockpick'          -- Item usado para tentar arrombar baús.
 Config.Tiers = {
     -- Nível 1 (Padrão)
@@ -124,6 +124,39 @@ Config.Lang = {
     ['admin_view_inventory'] = 'Ver Inventário',
     ['admin_view_inventory_desc'] = 'Visualizar todos os itens do baú selecionado.',
 
+    ['admin_view_logs'] = 'Ver Registros',
+    ['admin_view_logs_desc'] = 'Visualizar histórico de ações no baú',
+    ['admin_chest_logs_title'] = 'Registros do Baú',
+    ['admin_no_logs'] = 'Nenhum registro encontrado',
+    ['admin_no_logs_desc'] = 'Este baú não possui histórico de ações',
+    ['admin_log_statistics'] = 'Estatísticas dos Registros',
+    ['admin_log_stats_desc'] = 'Total de ações: %d | Última ação: %s',
+    ['admin_details'] = 'Detalhes',
+    ['admin_never'] = 'Nunca',
+
+    ['admin_action_rename'] = 'Renomear Baú',
+    ['admin_action_rename_desc'] = 'Renomear o baú para um novo nome.',
+    ['admin_rename_input'] = 'Digite o novo nome do baú:',
+    ['admin_rename_success'] = 'Baú renomeado com sucesso!',
+    ['admin_rename_failed'] = 'Falha ao renomear o baú. Verifique se o nome é válido.',
+    
+    -- Tipos de ações (para tradução)
+    ['admin_action_open'] = 'Abertura',
+    ['admin_action_share'] = 'Compartilhamento',
+    ['admin_action_unshare'] = 'Remoção de Acesso',
+    ['admin_action_remove'] = 'Remoção',
+    ['admin_action_upgrade'] = 'Melhoria',
+    ['admin_action_lockpick_success'] = 'Arrombamento (Sucesso)',
+    ['admin_action_lockpick_fail'] = 'Arrombamento (Falhou)',
+
+       -- Renomeação
+    ['chest_renamed'] = 'Baú renomeado com sucesso!',
+    ['rename_chest'] = 'Renomear Baú',
+    ['chest_name_label'] = 'Nome do Baú',
+    ['chest_name_placeholder'] = 'Digite o novo nome...',
+    ['invalid_name_length'] = 'O nome deve ter entre 3 e 50 caracteres.',
+    ['invalid_characters'] = 'O nome contém caracteres não permitidos.',
+    ['rename_failed'] = 'Falha ao renomear o baú.',
 }
 
     

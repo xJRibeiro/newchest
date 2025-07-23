@@ -142,40 +142,54 @@ function Database.GetChest(chestUUID)
     return result
 end
 
-function Database.GetAllChests()
-    local success, result = pcall(function()
-        return MySQL.query.await([[
-            SELECT *, 
-                   DATE_FORMAT(created_at, '%d/%m/%Y %H:%i:%s') AS created_at_formatted, 
-                   DATE_FORMAT(updated_at, '%d/%m/%Y %H:%i:%s') AS updated_at_formatted
-            FROM player_chests
-        ]])
+function Database.RenameChest(chestUUID, customName)
+    if not chestUUID or type(chestUUID) ~= 'string' then
+        print('[RSG-CHEST][ERROR] UUID inválido fornecido para RenameChest')
+        return false
+    end
+    
+    if not customName or type(customName) ~= 'string' then
+        print('[RSG-CHEST][ERROR] Nome inválido fornecido para RenameChest')
+        return false
+    end
+    
+    local success = pcall(function()
+        MySQL.update.await(
+            'UPDATE player_chests SET custom_name = ?, updated_at = CURRENT_TIMESTAMP WHERE chest_uuid = ?',
+            { customName, chestUUID }
+        )
     end)
     
-    if not success then
-        print('[RSG-CHEST][ERROR] Erro ao buscar todos os baús')
-        return {}
+    if success then
+        print(('[RSG-CHEST] Baú %s renomeado para: %s'):format(chestUUID, customName))
+        return true
+    else
+        print(('[RSG-CHEST][ERROR] Falha ao renomear baú %s'):format(chestUUID))
+        return false
     end
+end
+
+
+function Database.GetAllChests()
+    local query = [[
+        SELECT *, 
+               DATE_FORMAT(created_at, '%d/%m/%Y %H:%i:%s') AS created_at_formatted, 
+               DATE_FORMAT(updated_at, '%d/%m/%Y %H:%i:%s') AS updated_at_formatted
+        FROM player_chests
+    ]]
     
+    local result = MySQL.query.await(query)
     if result then
         for i = 1, #result do
-            local decode_success = pcall(function()
-                result[i].coords = json.decode(result[i].coords) or {}
-                result[i].shared_with = result[i].shared_with and json.decode(result[i].shared_with) or {}
-                result[i].items = result[i].items and json.decode(result[i].items) or {}
-            end)
-            
-            if not decode_success then
-                print(('[RSG-CHEST][WARNING] Erro ao decodificar dados do baú %s'):format(result[i].chest_uuid))
-                result[i].coords = {}
-                result[i].shared_with = {}
-                result[i].items = {}
-            end
+            result[i].coords = json.decode(result[i].coords)
+            result[i].shared_with = result[i].shared_with and json.decode(result[i].shared_with) or {}
+            result[i].items = result[i].items and json.decode(result[i].items) or {}
+            -- custom_name já vem diretamente do banco, não precisa decodificar
         end
     end
-    
-    return result or {}
+    return result
 end
+
 
 function Database.ShareChest(chestUUID, sharedWith)
     if not chestUUID or not sharedWith then
@@ -218,6 +232,10 @@ function Database.DeleteChest(chestUUID)
     end
 end
 
+-- =================================================================
+-- FUNÇÕES DE LOGS - ATUALIZADAS PARA SUA TABELA
+-- =================================================================
+
 function Database.LogAction(chestUUID, actorCitizenId, actionType, targetCitizenId, details)
     if not chestUUID or not actorCitizenId or not actionType then
         print('[RSG-CHEST][WARNING] Parâmetros obrigatórios em falta para LogAction')
@@ -225,9 +243,12 @@ function Database.LogAction(chestUUID, actorCitizenId, actionType, targetCitizen
     end
     
     local success = pcall(function()
+        -- ATUALIZADO: Usando os nomes corretos dos campos da sua tabela
+        -- log_id é AUTO_INCREMENT, então não precisa ser especificado
+        -- timestamp será definido automaticamente
         MySQL.insert.await(
-            'INSERT INTO player_chests_logs (chest_uuid, actor_citizenid, target_citizenid, action_type, details) VALUES (?, ?, ?, ?, ?)',
-            { chestUUID, actorCitizenId, targetCitizenId, actionType, details or '' }
+            'INSERT INTO player_chests_logs (chest_uuid, actor_citizenid, action_type, target_citizenid, details) VALUES (?, ?, ?, ?, ?)',
+            { chestUUID, actorCitizenId, actionType, targetCitizenId, details or '' }
         )
     end)
     
@@ -237,6 +258,106 @@ function Database.LogAction(chestUUID, actorCitizenId, actionType, targetCitizen
     else
         print(('[RSG-CHEST][ERROR] Falha ao logar ação para baú %s'):format(chestUUID))
         return false
+    end
+end
+
+function Database.GetChestLogs(chestUUID, limit)
+    if not chestUUID or type(chestUUID) ~= 'string' then
+        print('[RSG-CHEST][ERROR] UUID inválido fornecido para GetChestLogs')
+        return {}
+    end
+    
+    limit = limit or 50 -- Limite padrão de 50 registros
+    
+    local success, result = pcall(function()
+        -- ATUALIZADO: Usando os nomes corretos dos campos da sua tabela
+        return MySQL.query.await([[
+            SELECT 
+                pcl.log_id,
+                pcl.chest_uuid,
+                pcl.actor_citizenid,
+                pcl.action_type,
+                pcl.target_citizenid,
+                pcl.details,
+                DATE_FORMAT(pcl.timestamp, '%d/%m/%Y %H:%i:%s') AS formatted_date,
+                p1.charinfo as actor_charinfo,
+                p2.charinfo as target_charinfo
+            FROM player_chests_logs pcl
+            LEFT JOIN players p1 ON pcl.actor_citizenid = p1.citizenid
+            LEFT JOIN players p2 ON pcl.target_citizenid = p2.citizenid
+            WHERE pcl.chest_uuid = ?
+            ORDER BY pcl.timestamp DESC
+            LIMIT ?
+        ]], { chestUUID, limit })
+    end)
+    
+    if not success then
+        print(('[RSG-CHEST][ERROR] Erro ao buscar logs do baú %s'):format(chestUUID))
+        return {}
+    end
+    
+    if result then
+        for i = 1, #result do
+            local log = result[i]
+            
+            -- Decodifica informações do ator
+            if log.actor_charinfo then
+                local success_decode, actor_info = pcall(json.decode, log.actor_charinfo)
+                if success_decode and actor_info and actor_info.firstname and actor_info.lastname then
+                    log.actor_name = ('%s %s'):format(actor_info.firstname, actor_info.lastname)
+                else
+                    log.actor_name = 'Desconhecido'
+                end
+            else
+                log.actor_name = 'Desconhecido'
+            end
+            
+            -- Decodifica informações do alvo (se existir)
+            if log.target_citizenid and log.target_charinfo then
+                local success_decode, target_info = pcall(json.decode, log.target_charinfo)
+                if success_decode and target_info and target_info.firstname and target_info.lastname then
+                    log.target_name = ('%s %s'):format(target_info.firstname, target_info.lastname)
+                else
+                    log.target_name = 'Desconhecido'
+                end
+            end
+        end
+    end
+    
+    return result or {}
+end
+
+function Database.GetChestLogStats(chestUUID)
+    if not chestUUID or type(chestUUID) ~= 'string' then
+        print('[RSG-CHEST][ERROR] UUID inválido fornecido para GetChestLogStats')
+        return { totalLogs = 0, lastAction = nil, mostActiveUser = nil }
+    end
+    
+    local success, stats = pcall(function()
+        -- ATUALIZADO: Usando o campo 'timestamp' correto da sua tabela
+        local result = MySQL.single.await([[
+            SELECT 
+                COUNT(*) as total_logs,
+                DATE_FORMAT(MAX(timestamp), '%d/%m/%Y %H:%i:%s') as last_action_date,
+                (SELECT actor_citizenid FROM player_chests_logs 
+                 WHERE chest_uuid = ? 
+                 GROUP BY actor_citizenid 
+                 ORDER BY COUNT(*) DESC LIMIT 1) as most_active_user
+            FROM player_chests_logs 
+            WHERE chest_uuid = ?
+        ]], { chestUUID, chestUUID })
+        return result
+    end)
+    
+    if success and stats then
+        return {
+            totalLogs = stats.total_logs or 0,
+            lastAction = stats.last_action_date,
+            mostActiveUser = stats.most_active_user
+        }
+    else
+        print(('[RSG-CHEST][ERROR] Falha ao obter estatísticas dos logs do baú %s'):format(chestUUID))
+        return { totalLogs = 0, lastAction = nil, mostActiveUser = nil }
     end
 end
 
@@ -331,6 +452,7 @@ CreateThread(function()
         end
     else
         print('[RSG-CHEST][ERROR] Tabelas do banco de dados não encontradas!')
+        print('[RSG-CHEST][INFO] Certifique-se de que as tabelas player_chests e player_chests_logs existem')
     end
 end)
 

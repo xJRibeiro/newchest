@@ -9,6 +9,12 @@ local TemporaryAccess = {}
 -- =================================================================
 -- FUNÇÕES AUXILIARES MELHORADAS
 -- =================================================================
+local function GetItemLabel(itemName)
+    if RSGCore.Shared.Items and RSGCore.Shared.Items[itemName] then
+        return RSGCore.Shared.Items[itemName].label or itemName
+    end
+    return itemName
+end
 
 local function ValidatePlayerDistance(src, coords, maxDistance)
     if not src or not coords then return false end
@@ -238,7 +244,7 @@ RegisterNetEvent('jx:chest:open', function(chestUUID)
     end
 
     exports['rsg-inventory']:OpenInventory(src, 'rsg_chest_' .. chestUUID, {
-        label = tierData.label .. (' de %s'):format(ownerName),
+        label = (chest.custom_name or tierData.label) .. (' de %s'):format(ownerName),
         maxweight = chest.max_weight,
         slots = chest.max_slots
     })
@@ -503,7 +509,7 @@ RegisterNetEvent('jx:chest:upgrade', function(chestUUID)
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
-            description = ('Você não possui um %s.'):format(Config.UpgradeItem) 
+            description = ('Você não possui o item necessário.')
         })
     end
 
@@ -612,7 +618,7 @@ RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
         local ownerName = GetChestOwnerName(chest.owner)
 
         exports['rsg-inventory']:OpenInventory(src, 'rsg_chest_' .. chestUUID, {
-            label = tierData.label .. (' de %s'):format(ownerName),
+            label = (chest.custom_name or tierData.label) .. (' de %s'):format(ownerName),
             maxweight = chest.max_weight,
             slots = chest.max_slots
         })
@@ -629,6 +635,84 @@ RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
         })
     end
 end)
+
+-- =================================================================
+-- EVENTO PARA RENOMEAR BAÚ
+-- =================================================================
+
+RegisterNetEvent('jx:chest:rename', function(chestUUID, newName)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+    
+    local chest = props[chestUUID]
+    
+    -- Verifica se é o dono
+    if chest.owner ~= Player.PlayerData.citizenid then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = Config.Lang['no_permission'] 
+        })
+    end
+    
+    -- Validação do nome
+    if not newName or type(newName) ~= 'string' then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Nome inválido fornecido.' 
+        })
+    end
+    
+    -- Remove espaços extras e valida tamanho
+    newName = newName:gsub("^%s*(.-)%s*$", "%1")
+    if #newName < 3 or #newName > 50 then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'O nome deve ter entre 3 e 50 caracteres.' 
+        })
+    end
+    
+    -- Filtra caracteres inválidos (opcional)
+    local filteredName = newName:gsub("[<>\"'&]", "")
+    if filteredName ~= newName then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'O nome contém caracteres não permitidos.' 
+        })
+    end
+    
+    -- Atualiza no banco de dados
+    if Database.RenameChest(chestUUID, filteredName) then
+        -- Atualiza no cache local
+        props[chestUUID].custom_name = filteredName
+        
+        -- Log da ação
+        Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'RENAME', nil, 
+            ('Renomeou o baú para: %s'):format(filteredName))
+        
+        -- Notifica sucesso
+        TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'success', 
+            title = 'Sucesso', 
+            description = ('Baú renomeado para "%s" com sucesso!'):format(filteredName)
+        })
+        
+        -- Atualiza a lista de props para todos os clientes
+        TriggerClientEvent('chest:updateProps', -1, props)
+    else
+        TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Falha ao renomear o baú. Tente novamente.' 
+        })
+    end
+end)
+
 
 RegisterNetEvent('chest:requestAllProps', function() 
     TriggerClientEvent('chest:updateProps', source, props) 
@@ -677,6 +761,84 @@ CreateThread(function()
         print('[RSG-CHEST] Lista de baús sincronizada com os clientes.')
     end
 end)
+
+-- =================================================================
+-- EVENTO PARA JOGADORES VEREM SEUS PRÓPRIOS REGISTROS
+-- =================================================================
+
+RegisterNetEvent('jx:chest:requestPlayerLogs', function(chestUUID)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+    
+    -- Verifica se o jogador tem permissão (dono ou compartilhado)
+    if not HasPermission(chestUUID, src) then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Você não tem permissão para ver os registros deste baú.' 
+        })
+    end
+    
+    local logs = Database.GetChestLogs(chestUUID, 50) -- Últimos 50 registros
+    local stats = Database.GetChestLogStats(chestUUID)
+    
+    if not logs or #logs == 0 then
+        TriggerClientEvent('jx:chest:showPlayerLogs', src, chestUUID, {}, stats)
+        return
+    end
+
+    -- Processa os logs para adicionar informações visuais
+    local processedLogs = {}
+    for _, log in ipairs(logs) do
+        local actionIcon = '📝'
+        local actionDescription = 'Ação Desconhecida'
+        
+        -- Define ícones e descrições baseados no tipo de ação
+        if log.action_type == 'OPEN' then
+            actionIcon = '📦'
+            actionDescription = 'Abertura do Baú'
+        elseif log.action_type == 'SHARE' then
+            actionIcon = '🤝'
+            actionDescription = 'Compartilhamento'
+        elseif log.action_type == 'UNSHARE' then
+            actionIcon = '🚫'
+            actionDescription = 'Remoção de Acesso'
+        elseif log.action_type == 'REMOVE' then
+            actionIcon = '🗑️'
+            actionDescription = 'Remoção do Baú'
+        elseif log.action_type == 'UPGRADE' then
+            actionIcon = '⬆️'
+            actionDescription = 'Melhoria do Baú'
+        elseif log.action_type == 'LOCKPICK_SUCCESS' then
+            actionIcon = '🔓'
+            actionDescription = 'Arrombamento (Sucesso)'
+        elseif log.action_type == 'LOCKPICK_FAIL' then
+            actionIcon = '🔒'
+            actionDescription = 'Tentativa de Arrombamento'
+        elseif log.action_type == 'RENAME' then
+            actionIcon = '🏷️'
+            actionDescription = 'Baú renomeado'
+        end
+        
+        table.insert(processedLogs, {
+            id = log.id,
+            action_type = log.action_type,
+            action_description = actionDescription,
+            actor_name = log.actor_name,
+            actor_citizenid = log.actor_citizenid,
+            target_name = log.target_name,
+            target_citizenid = log.target_citizenid,
+            details = log.details,
+            formatted_date = log.formatted_date,
+            icon = actionIcon
+        })
+    end
+
+    TriggerClientEvent('jx:chest:showPlayerLogs', src, chestUUID, processedLogs, stats)
+end)
+
 
 -- Cleanup automático de acessos temporários expirados
 CreateThread(function()

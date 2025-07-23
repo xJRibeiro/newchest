@@ -158,9 +158,40 @@ function AddTargetToProp(entity, chestUUID)
             label = "Abrir Baú", 
             action = function() TriggerServerEvent('jx:chest:open', chestUUID) end 
         })
+        
     end
     
     if isOwner then
+        table.insert(options, {
+        icon = "fas fa-edit",
+        label = "Renomear Baú",
+        action = function()
+            local input = lib.inputDialog('Renomear Baú', {
+                {
+                    type = 'input',
+                    label = 'Nome do Baú',
+                    description = 'Digite o novo nome para seu baú',
+                    placeholder = propData.custom_name or 'Meu Baú',
+                    required = true,
+                    min = 3,
+                    max = 50
+                }
+            })
+            
+            if input and input[1] then
+                local newName = input[1]:gsub("^%s*(.-)%s*$", "%1") -- Remove espaços extras
+                if #newName >= 3 and #newName <= 50 then
+                    TriggerServerEvent('jx:chest:rename', chestUUID, newName)
+                else
+                    lib.notify({ 
+                        type = 'error', 
+                        title = 'Erro', 
+                        description = 'O nome deve ter entre 3 e 50 caracteres.' 
+                    })
+                end
+            end
+        end
+    })
         table.insert(options, { 
             icon = "fas fa-share-alt", 
             label = "Compartilhar Baú", 
@@ -171,6 +202,14 @@ function AddTargetToProp(entity, chestUUID)
             icon = "fas fa-users-cog", 
             label = "Gerenciar Acesso", 
             action = function() OpenManageShareMenu(chestUUID) end 
+        })
+        
+        table.insert(options, {
+            icon = "fas fa-history",
+            label = "Ver Registros",
+            action = function() 
+                TriggerServerEvent('jx:chest:requestPlayerLogs', chestUUID)
+            end
         })
         
         local currentTier = propData.tier or 1
@@ -228,9 +267,154 @@ function AddTargetToProp(entity, chestUUID)
     return false
 end
 
+
 -- =================================================================
 -- EVENT HANDLERS OTIMIZADOS
 -- =================================================================
+-- =================================================================
+-- SISTEMA DE LOGS PARA JOGADORES
+-- =================================================================
+
+function ShowPlayerChestLogs(chestUUID, logs, stats)
+    local options = {}
+    
+    -- Cabeçalho com estatísticas
+    if stats and stats.totalLogs > 0 then
+        table.insert(options, {
+            title = '📊 Estatísticas do Baú',
+            description = string.format('Total de ações: %d \n Última ação: %s', 
+                stats.totalLogs, 
+                stats.lastAction and stats.lastAction or 'Nunca'
+            ),
+            icon = 'chart-bar',
+            disabled = true
+        })
+        
+    end
+    
+    if not logs or #logs == 0 then
+        table.insert(options, { 
+            title = 'Nenhum registro encontrado', 
+            description = 'Este baú não possui histórico de ações',
+            disabled = true, 
+            icon = 'inbox' 
+        })
+    else
+        for _, log in ipairs(logs) do
+            local title = string.format('%s %s', log.icon, log.action_description)
+            local description = string.format('%s \n %s', log.actor_name, log.formatted_date)
+            
+            if log.target_name then
+                description = description .. ' → ' .. log.target_name
+            end
+            
+            table.insert(options, {
+                title = title,
+                description = description,
+                icon = 'file-alt',
+                disabled = true,
+                metadata = log.details and {
+                    { label = 'Detalhes', value = log.details }
+                } or nil
+            })
+        end
+    end
+    
+    -- Botão para fechar
+    table.insert(options, {
+        title = 'Fechar',
+        icon = 'times',
+        onSelect = function()
+            lib.hideContext()
+        end
+    })
+    
+    lib.registerContext({ 
+        id = 'player_chest_logs_menu', 
+        title = 'Registros do Baú (' .. (stats and stats.totalLogs or 0) .. ')', 
+        options = options 
+    })
+    lib.showContext('player_chest_logs_menu')
+end
+
+-- Event handler para receber os logs
+RegisterNetEvent('jx:chest:showPlayerLogs', function(chestUUID, logs, stats)
+    print('[RSG-CHEST][DEBUG] Logs recebidos para baú:', chestUUID, 'Total de logs:', #logs)
+    ShowPlayerChestLogs(chestUUID, logs, stats)
+end)
+
+-- EVENTO PARA JOGADORES VEREM SEUS PRÓPRIOS REGISTROS
+
+RegisterNetEvent('jx:chest:requestPlayerLogs', function(chestUUID)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+    
+    -- Verifica se o jogador tem permissão (dono ou compartilhado)
+    if not HasPermission(chestUUID, src) then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Você não tem permissão para ver os registros deste baú.' 
+        })
+    end
+    
+    local logs = Database.GetChestLogs(chestUUID, 50) -- Últimos 50 registros
+    local stats = Database.GetChestLogStats(chestUUID)
+    
+    if not logs or #logs == 0 then
+        TriggerClientEvent('jx:chest:showPlayerLogs', src, chestUUID, {}, stats)
+        return
+    end
+
+    -- Processa os logs para adicionar informações visuais
+    local processedLogs = {}
+    for _, log in ipairs(logs) do
+        local actionIcon = '📝'
+        local actionDescription = 'Ação Desconhecida'
+        
+        -- Define ícones e descrições baseados no tipo de ação
+        if log.action_type == 'OPEN' then
+            actionIcon = '📦'
+            actionDescription = 'Abertura do Baú'
+        elseif log.action_type == 'SHARE' then
+            actionIcon = '🤝'
+            actionDescription = 'Compartilhamento'
+        elseif log.action_type == 'UNSHARE' then
+            actionIcon = '🚫'
+            actionDescription = 'Remoção de Acesso'
+        elseif log.action_type == 'REMOVE' then
+            actionIcon = '🗑️'
+            actionDescription = 'Remoção do Baú'
+        elseif log.action_type == 'UPGRADE' then
+            actionIcon = '⬆️'
+            actionDescription = 'Melhoria do Baú'
+        elseif log.action_type == 'LOCKPICK_SUCCESS' then
+            actionIcon = '🔓'
+            actionDescription = 'Arrombamento (Sucesso)'
+        elseif log.action_type == 'LOCKPICK_FAIL' then
+            actionIcon = '🔒'
+            actionDescription = 'Tentativa de Arrombamento'
+        end
+        
+        table.insert(processedLogs, {
+            id = log.id,
+            action_type = log.action_type,
+            action_description = actionDescription,
+            actor_name = log.actor_name,
+            actor_citizenid = log.actor_citizenid,
+            target_name = log.target_name,
+            target_citizenid = log.target_citizenid,
+            details = log.details,
+            formatted_date = log.formatted_date,
+            icon = actionIcon
+        })
+    end
+
+    TriggerClientEvent('jx:chest:showPlayerLogs', src, chestUUID, processedLogs, stats)
+end)
+
 
 RegisterNetEvent('chest:updateProps', function(propsFromServer)
     ClearAllProps()

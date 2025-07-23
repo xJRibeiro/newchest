@@ -56,6 +56,21 @@ Admin.Functions = {
             return false
         end
         return true
+    end,
+
+    logAdminAction = function(src, action, details)
+        local Player = RSGCore.Functions.GetPlayer(src)
+        if Player then
+            local timestamp = os.date('%d/%m/%Y %H:%M:%S')
+            local playerName = ('%s %s'):format(
+                Player.PlayerData.charinfo.firstname, 
+                Player.PlayerData.charinfo.lastname
+            )
+            print(('[RSG-CHEST][ADMIN] %s - %s (%s): %s'):format(timestamp, playerName, Player.PlayerData.citizenid, action))
+            if details then
+                print(('[RSG-CHEST][ADMIN] Detalhes: %s'):format(details))
+            end
+        end
     end
 }
 
@@ -66,6 +81,8 @@ Admin.Functions = {
 Admin.Events = {
     getAdminChestData = function(src)
         if not Admin.Functions.validateAdmin(src) then return end
+
+        Admin.Functions.logAdminAction(src, 'Acessou painel administrativo')
 
         local _L = Admin.Functions._L
         local allChests = Database.GetAllChests()
@@ -161,7 +178,8 @@ Admin.Events = {
                 sharedWith = sharedWith,
                 created_at = chest.created_at_formatted,
                 updated_at = chest.updated_at_formatted,
-                tier = chest.tier or 1
+                tier = chest.tier or 1,
+                custom_name = chest.custom_name
             })
         end
 
@@ -181,6 +199,8 @@ Admin.Events = {
             return
         end
 
+        Admin.Functions.logAdminAction(src, 'Teleportou para baú', 'UUID: ' .. chestUUID)
+
         TriggerClientEvent('rsg-chest:client:teleportToCoords', src, chest.coords)
         Admin.Functions.notify(src, 'success', Admin.Functions._L('success'), Admin.Functions._L('admin_teleported_to_chest'))
     end,
@@ -192,8 +212,20 @@ Admin.Events = {
             return
         end
 
+        local chest = Database.GetChest(chestUUID)
+        if not chest then
+            Admin.Functions.notify(src, 'error', Admin.Functions._L('error'), 'Baú não encontrado')
+            return
+        end
+
         -- Remove do inventário primeiro
-        exports['rsg-inventory']:DeleteInventory('rsg_chest_' .. chestUUID)
+        local success_inventory = pcall(function()
+            exports['rsg-inventory']:DeleteInventory('rsg_chest_' .. chestUUID)
+        end)
+
+        if not success_inventory then
+            print(('[RSG-CHEST][WARNING] Falha ao remover inventário do baú %s'):format(chestUUID))
+        end
         
         -- Remove do banco de dados
         if Database.DeleteChest(chestUUID) then
@@ -203,7 +235,8 @@ Admin.Events = {
 
             -- Remove do cliente
             TriggerClientEvent('chest:removePropClient', -1, chestUUID)
-            print(('[RSG-CHEST][ADMIN] Baú removido: %s'):format(chestUUID))
+            
+            Admin.Functions.logAdminAction(src, 'Removeu baú', string.format('UUID: %s, Dono: %s', chestUUID, chest.owner))
             
             Admin.Functions.notify(src, 'success', Admin.Functions._L('success'), Admin.Functions._L('admin_chest_removed'))
             TriggerClientEvent('rsg-chest:client:refreshAdminPanel', src)
@@ -222,19 +255,34 @@ Admin.Events = {
         end
 
         local removedCount = 0
+        local failedCount = 0
+
         for _, chest in ipairs(allChests) do
-            exports['rsg-inventory']:DeleteInventory('rsg_chest_' .. chest.chest_uuid)
+            -- Remove inventário com proteção
+            pcall(function()
+                exports['rsg-inventory']:DeleteInventory('rsg_chest_' .. chest.chest_uuid)
+            end)
             
             if Database.DeleteChest(chest.chest_uuid) then
                 if props then props[chest.chest_uuid] = nil end
                 if ChestUsers then ChestUsers[chest.chest_uuid] = nil end
                 TriggerClientEvent('chest:removePropClient', -1, chest.chest_uuid)
                 removedCount = removedCount + 1
+            else
+                failedCount = failedCount + 1
             end
         end
 
-        Admin.Functions.notify(src, 'success', Admin.Functions._L('success'), 
-            string.format('%s: %d baús removidos', Admin.Functions._L('admin_all_chests_removed'), removedCount))
+        Admin.Functions.logAdminAction(src, 'Removeu todos os baús', string.format('Removidos: %d, Falharam: %d', removedCount, failedCount))
+
+        if failedCount > 0 then
+            Admin.Functions.notify(src, 'warning', 'Parcialmente Concluído', 
+                string.format('Removidos: %d baús. Falharam: %d baús.', removedCount, failedCount))
+        else
+            Admin.Functions.notify(src, 'success', Admin.Functions._L('success'), 
+                string.format('%s: %d baús removidos', Admin.Functions._L('admin_all_chests_removed'), removedCount))
+        end
+
         TriggerClientEvent('rsg-chest:client:refreshAdminPanel', src)
     end,
 
@@ -254,11 +302,86 @@ Admin.Events = {
         local playersInfo = Admin.Functions.getPlayerNames({chest.owner})
         local ownerName = playersInfo[chest.owner] or 'Desconhecido'
 
+        Admin.Functions.logAdminAction(src, 'Abriu inventário do baú', string.format('UUID: %s, Dono: %s', chestUUID, ownerName))
+
+        local chestLabel = "[ADMIN] Baú"
+        if chest.custom_name then
+            chestLabel = string.format("[ADMIN] %s", chest.custom_name)
+        end
+        chestLabel = chestLabel .. string.format(" de %s", ownerName)
+
         exports['rsg-inventory']:OpenInventory(src, 'rsg_chest_' .. chestUUID, {
-            label = ("[ADMIN] Baú de %s"):format(ownerName),
+            label = chestLabel,
             maxweight = chest.max_weight or Config.ChestWeight,
             slots = chest.max_slots or Config.ChestSlots
         })
+    end,
+     
+    getChestLogs = function(src, chestUUID)
+        if not Admin.Functions.validateAdmin(src) then return end
+        if not Admin.Functions.validateChestUUID(chestUUID) then
+            Admin.Functions.notify(src, 'error', Admin.Functions._L('error'), 'UUID de baú inválido')
+            return
+        end
+
+        Admin.Functions.logAdminAction(src, 'Visualizou logs do baú', 'UUID: ' .. chestUUID)
+
+        local logs = Database.GetChestLogs(chestUUID, 100) -- Últimos 100 registros
+        local stats = Database.GetChestLogStats(chestUUID)
+        
+        if not logs or #logs == 0 then
+            TriggerClientEvent('rsg-chest:client:showChestLogs', src, chestUUID, {}, stats)
+            return
+        end
+
+        -- Processa os logs para adicionar informações adicionais
+        local processedLogs = {}
+        for _, log in ipairs(logs) do
+            local actionIcon = '📝'
+            local actionColor = 'blue'
+            
+            -- Define ícones e cores baseados no tipo de ação
+            if log.action_type == 'OPEN' then
+                actionIcon = '📦'
+                actionColor = 'green'
+            elseif log.action_type == 'SHARE' then
+                actionIcon = '🤝'
+                actionColor = 'blue'
+            elseif log.action_type == 'UNSHARE' then
+                actionIcon = '🚫'
+                actionColor = 'orange'
+            elseif log.action_type == 'REMOVE' then
+                actionIcon = '🗑️'
+                actionColor = 'red'
+            elseif log.action_type == 'UPGRADE' then
+                actionIcon = '⬆️'
+                actionColor = 'purple'
+            elseif log.action_type == 'LOCKPICK_SUCCESS' then
+                actionIcon = '🔓'
+                actionColor = 'yellow'
+            elseif log.action_type == 'LOCKPICK_FAIL' then
+                actionIcon = '🔒'
+                actionColor = 'red'
+            elseif log.action_type == 'RENAME' then
+                actionIcon = '🏷️'
+                actionColor = 'cyan'
+            end
+            
+            table.insert(processedLogs, {
+                id = log.log_id or log.id,
+                action_type = log.action_type,
+                actor_name = log.actor_name,
+                actor_citizenid = log.actor_citizenid,
+                target_name = log.target_name,
+                target_citizenid = log.target_citizenid,
+                details = log.details,
+                formatted_date = log.formatted_date,
+                icon = actionIcon,
+                color = actionColor
+            })
+        end
+
+        TriggerClientEvent('rsg-chest:client:showChestLogs', src, chestUUID, processedLogs, stats)
     end
 }
 
@@ -270,21 +393,77 @@ Admin.Commands = {
     cleanOrphanChests = function(src)
         if not Admin.Functions.validateAdmin(src) then return end
 
-        local orphanCount = Database.CleanupOrphanChests()
+        Admin.Functions.logAdminAction(src, 'Executou limpeza de baús órfãos')
+
+        local orphanCount = 0
+        if Database.CleanupOrphanChests then
+            orphanCount = Database.CleanupOrphanChests()
+        else
+            -- Fallback manual se a função não existir
+            local allChests = Database.GetAllChests()
+            if allChests then
+                local ownerIds = {}
+                for _, chest in ipairs(allChests) do ownerIds[chest.owner] = true end
+
+                local ownerIdList = {}
+                for id in pairs(ownerIds) do table.insert(ownerIdList, id) end
+
+                if #ownerIdList > 0 then
+                    local query = 'SELECT citizenid FROM players WHERE citizenid IN (?' .. string.rep(',?', #ownerIdList - 1) .. ')'
+                    local playersResult = MySQL.query.await(query, ownerIdList)
+                    
+                    local existingPlayers = {}
+                    for _, row in ipairs(playersResult) do existingPlayers[row.citizenid] = true end
+
+                    for _, chest in ipairs(allChests) do
+                        if not existingPlayers[chest.owner] then
+                            exports['rsg-inventory']:DeleteInventory('rsg_chest_' .. chest.chest_uuid)
+                            Database.DeleteChest(chest.chest_uuid)
+                            if props then props[chest.chest_uuid] = nil end
+                            TriggerClientEvent('chest:removePropClient', -1, chest.chest_uuid)
+                            orphanCount = orphanCount + 1
+                        end
+                    end
+                end
+            end
+        end
         
         if orphanCount > 0 then
             Admin.Functions.notify(src, 'success', Admin.Functions._L('success'), 
-                Admin.Functions._L('admin_orphan_cleaned', orphanCount))
+                string.format('Baús órfãos removidos: %d', orphanCount))
         else
             Admin.Functions.notify(src, 'info', Admin.Functions._L('success'), 
-                Admin.Functions._L('admin_orphan_none_found'))
+                'Nenhum baú órfão encontrado')
         end
     end,
 
     getChestStats = function(src)
         if not Admin.Functions.validateAdmin(src) then return end
 
-        local stats = Database.GetChestStats()
+        Admin.Functions.logAdminAction(src, 'Consultou estatísticas dos baús')
+
+        local stats = { totalChests = 0, sharedChests = 0, averageTier = 0 }
+        
+        if Database.GetChestStats then
+            stats = Database.GetChestStats()
+        else
+            -- Fallback manual
+            local allChests = Database.GetAllChests()
+            if allChests then
+                local tierSum = 0
+                for _, chest in ipairs(allChests) do
+                    stats.totalChests = stats.totalChests + 1
+                    if chest.shared_with and next(chest.shared_with) then
+                        stats.sharedChests = stats.sharedChests + 1
+                    end
+                    tierSum = tierSum + (chest.tier or 1)
+                end
+                if stats.totalChests > 0 then
+                    stats.averageTier = tierSum / stats.totalChests
+                end
+            end
+        end
+
         local message = string.format(
             'Estatísticas dos Baús:\n• Total: %d\n• Compartilhados: %d\n• Tier médio: %.2f',
             stats.totalChests, stats.sharedChests, stats.averageTier
@@ -299,7 +478,7 @@ Admin.Commands = {
 -- =================================================================
 
 Admin.init = function()
-    -- Eventos de rede
+    -- Registrar eventos de rede
     RegisterNetEvent('rsg-chest:server:getAdminChestData', function()
         Admin.Events.getAdminChestData(source)
     end)
@@ -320,16 +499,20 @@ Admin.init = function()
         Admin.Events.adminOpenChestInventory(source, chestUUID)
     end)
 
-    -- Comandos
-    RSGCore.Commands.Add('adminchest', Admin.Functions._L('admin_command_desc'), {}, false, function(source)
+    RegisterNetEvent('rsg-chest:server:getChestLogs', function(chestUUID)
+        Admin.Events.getChestLogs(source, chestUUID)
+    end)
+
+    -- Registrar comandos administrativos
+    RSGCore.Commands.Add('adminchest', 'Abrir painel administrativo de baús', {}, false, function(source)
         if not Admin.Functions.validateAdmin(source) then
-            Admin.Functions.notify(source, 'error', Admin.Functions._L('error'), Admin.Functions._L('no_permission'))
+            Admin.Functions.notify(source, 'error', 'Erro', 'Você não tem permissão para isso!')
             return
         end
         TriggerClientEvent('rsg-chest:client:openAdminPanel', source)
     end, 'admin')
 
-    RSGCore.Commands.Add('cleanorphanchests', Admin.Functions._L('admin_clean_orphan_desc'), {}, false, function(source)
+    RSGCore.Commands.Add('cleanorphanchests', 'Limpar baús de jogadores que não existem mais', {}, false, function(source)
         Admin.Commands.cleanOrphanChests(source)
     end, 'admin')
 
@@ -337,7 +520,10 @@ Admin.init = function()
         Admin.Commands.getChestStats(source)
     end, 'admin')
 
+    -- Log de inicialização
     print('[RSG-CHEST] Sistema administrativo inicializado com sucesso')
+    print('[RSG-CHEST] Comandos disponíveis: /adminchest, /cleanorphanchests, /cheststats')
 end
 
+-- Inicializar o sistema
 Admin.init()
