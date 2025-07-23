@@ -285,7 +285,7 @@ function StartPlacementMode()
                 end
                 
                 -- 2. Desenhar eixos com cores da validade
-                DrawPropAxes(PreviewObject, isValid)
+              --  DrawPropAxes(PreviewObject, isValid)
                 
                 -- 3. Círculo no chão indicando área
                 DrawGroundCircle(finalCoords, Config.MaxDistance or 2.0, isValid)
@@ -298,11 +298,7 @@ function StartPlacementMode()
                 local textColor = isValid and {r = 0, g = 255, b = 0, a = 255} or {r = 255, g = 0, b = 0, a = 255}
                 DrawText3D(finalCoords, statusText, textColor)
                 
-                -- 6. Texto adicional com instruções
-                local instructionText = isValid and "~g~ENTER~s~ Confirmar | " or "~r~Mova para local válido~s~ | "
-                instructionText = instructionText .. "~b~← →~s~ Girar | ~r~Botão Direito~s~ Cancelar"
-                DrawText3D(vector3(finalCoords.x, finalCoords.y, finalCoords.z + 0.5), instructionText, {r = 255, g = 255, b = 255, a = 200})
-                
+               
                 -- Mostrar prompts nativos
                 local PropPlacerGroupName = CreateVarString(10, 'LITERAL_STRING', 'Posicionar Baú')
                 PromptSetActiveGroupThisFrame(PromptPlacerGroup, PropPlacerGroupName)
@@ -379,8 +375,7 @@ function PlaceChest(coords, heading)
     -- ✅ ANIMAÇÕES QUE FUNCIONAM NO RDR3
     local animations = {
         {dict = "amb_work@world_human_crouch_inspect@male_a@base", anim = "base"},
-        {dict = "amb_work@world_human_hammer@male_a@base", anim = "base"},
-        {dict = "script_re@craft@crafting_fallback", anim = "craft_trans_kneel_to_squat"}
+
     }
     
     local animLoaded = false

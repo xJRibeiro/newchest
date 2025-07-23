@@ -1,4 +1,8 @@
-local RSGCore = exports['rsg-core']:GetCoreObject()
+-- =================================================================
+-- INICIALIZAÇÃO DO MÓDULO DATABASE
+-- =================================================================
+
+local Database = {} -- ✅ INICIALIZA A TABELA ANTES DE QUALQUER USO
 
 -- =================================================================
 -- FUNÇÕES AUXILIARES MELHORADAS
@@ -61,10 +65,8 @@ local function ValidateChestData(owner, coords, heading, model)
 end
 
 -- =================================================================
--- FUNÇÕES DO BANCO DE DADOS
+-- FUNÇÕES PRINCIPAIS DO DATABASE
 -- =================================================================
-
-local Database = {}
 
 function Database.CreateChest(owner, coords, heading, model)
     local isValid, errorMsg = ValidateChestData(owner, coords, heading, model)
@@ -124,7 +126,6 @@ function Database.GetChest(chestUUID)
     end
     
     if result then
-        -- Decodifica dados JSON com tratamento de erro
         local success_decode = pcall(function()
             result.coords = json.decode(result.coords) or {}
             result.shared_with = result.shared_with and json.decode(result.shared_with) or {}
@@ -142,53 +143,98 @@ function Database.GetChest(chestUUID)
     return result
 end
 
-function Database.RenameChest(chestUUID, customName)
-    if not chestUUID or type(chestUUID) ~= 'string' then
-        print('[RSG-CHEST][ERROR] UUID inválido fornecido para RenameChest')
-        return false
-    end
-    
-    if not customName or type(customName) ~= 'string' then
-        print('[RSG-CHEST][ERROR] Nome inválido fornecido para RenameChest')
-        return false
-    end
-    
-    local success = pcall(function()
-        MySQL.update.await(
-            'UPDATE player_chests SET custom_name = ?, updated_at = CURRENT_TIMESTAMP WHERE chest_uuid = ?',
-            { customName, chestUUID }
-        )
-    end)
-    
-    if success then
-        print(('[RSG-CHEST] Baú %s renomeado para: %s'):format(chestUUID, customName))
-        return true
-    else
-        print(('[RSG-CHEST][ERROR] Falha ao renomear baú %s'):format(chestUUID))
-        return false
-    end
-end
-
-
 function Database.GetAllChests()
     local query = [[
         SELECT *, 
                DATE_FORMAT(created_at, '%d/%m/%Y %H:%i:%s') AS created_at_formatted, 
-               DATE_FORMAT(updated_at, '%d/%m/%Y %H:%i:%s') AS updated_at_formatted
+               DATE_FORMAT(updated_at, '%d/%m/%Y %H:%i:%s') AS updated_at_formatted,
+               COALESCE(durability, 100) as durability
         FROM player_chests
     ]]
-    
     local result = MySQL.query.await(query)
     if result then
         for i = 1, #result do
             result[i].coords = json.decode(result[i].coords)
             result[i].shared_with = result[i].shared_with and json.decode(result[i].shared_with) or {}
             result[i].items = result[i].items and json.decode(result[i].items) or {}
-            -- custom_name já vem diretamente do banco, não precisa decodificar
+            
+            -- ✅ GARANTIR QUE DURABILITY TENHA UM VALOR PADRÃO
+            result[i].durability = result[i].durability or 100
+            
+            -- Marca caixas misteriosas
+            if result[i].owner == 'SYSTEM' and result[i].custom_name == 'Caixa Misteriosa' then
+                result[i].is_lore_chest = true
+            end
         end
     end
     return result
 end
+
+function Database.GetChest(chestUUID)
+    local result = MySQL.single.await('SELECT *, COALESCE(durability, 100) as durability FROM player_chests WHERE chest_uuid = ?', { chestUUID })
+    if result then
+        result.coords = json.decode(result.coords)
+        result.shared_with = result.shared_with and json.decode(result.shared_with) or {}
+        result.items = result.items and json.decode(result.items) or {}
+        result.durability = result.durability or 100 -- ✅ GARANTIR VALOR PADRÃO
+    end
+    return result
+end
+
+
+-- =================================================================
+-- FUNÇÕES DE DURABILIDADE DO BANCO DE DADOS
+-- =================================================================
+
+function Database.UpdateChestDurability(chestUUID, newDurability)
+    if not chestUUID or not newDurability then
+        print('[RSG-CHEST][ERROR] Parâmetros inválidos para UpdateChestDurability')
+        return false
+    end
+    
+    -- Garante que a durabilidade fique entre 0 e 100
+    newDurability = math.max(0, math.min(100, newDurability))
+    
+    local success = pcall(function()
+        MySQL.update.await(
+            'UPDATE player_chests SET durability = ?, updated_at = CURRENT_TIMESTAMP WHERE chest_uuid = ?',
+            { newDurability, chestUUID }
+        )
+    end)
+    
+    if success then
+        print(('[RSG-CHEST] Durabilidade do baú %s atualizada para: %d'):format(chestUUID, newDurability))
+        return true
+    else
+        print(('[RSG-CHEST][ERROR] Falha ao atualizar durabilidade do baú %s'):format(chestUUID))
+        return false
+    end
+end
+
+function Database.DegradeChestDurability(chestUUID, degradeAmount)
+    if not chestUUID or not degradeAmount then return false end
+    
+    local currentData = Database.GetChest(chestUUID)
+    if not currentData then return false end
+    
+    local currentDurability = currentData.durability or 100
+    local newDurability = math.max(0, currentDurability - degradeAmount)
+    
+    return Database.UpdateChestDurability(chestUUID, newDurability)
+end
+
+function Database.RepairChest(chestUUID, repairAmount)
+    if not chestUUID or not repairAmount then return false end
+    
+    local currentData = Database.GetChest(chestUUID)
+    if not currentData then return false end
+    
+    local currentDurability = currentData.durability or 100
+    local newDurability = math.min(100, currentDurability + repairAmount)
+    
+    return Database.UpdateChestDurability(chestUUID, newDurability)
+end
+
 
 
 function Database.ShareChest(chestUUID, sharedWith)
@@ -232,10 +278,6 @@ function Database.DeleteChest(chestUUID)
     end
 end
 
--- =================================================================
--- FUNÇÕES DE LOGS - ATUALIZADAS PARA SUA TABELA
--- =================================================================
-
 function Database.LogAction(chestUUID, actorCitizenId, actionType, targetCitizenId, details)
     if not chestUUID or not actorCitizenId or not actionType then
         print('[RSG-CHEST][WARNING] Parâmetros obrigatórios em falta para LogAction')
@@ -243,9 +285,6 @@ function Database.LogAction(chestUUID, actorCitizenId, actionType, targetCitizen
     end
     
     local success = pcall(function()
-        -- ATUALIZADO: Usando os nomes corretos dos campos da sua tabela
-        -- log_id é AUTO_INCREMENT, então não precisa ser especificado
-        -- timestamp será definido automaticamente
         MySQL.insert.await(
             'INSERT INTO player_chests_logs (chest_uuid, actor_citizenid, action_type, target_citizenid, details) VALUES (?, ?, ?, ?, ?)',
             { chestUUID, actorCitizenId, actionType, targetCitizenId, details or '' }
@@ -267,10 +306,9 @@ function Database.GetChestLogs(chestUUID, limit)
         return {}
     end
     
-    limit = limit or 50 -- Limite padrão de 50 registros
+    limit = limit or 50
     
     local success, result = pcall(function()
-        -- ATUALIZADO: Usando os nomes corretos dos campos da sua tabela
         return MySQL.query.await([[
             SELECT 
                 pcl.log_id,
@@ -300,19 +338,21 @@ function Database.GetChestLogs(chestUUID, limit)
         for i = 1, #result do
             local log = result[i]
             
-            -- Decodifica informações do ator
-            if log.actor_charinfo then
-                local success_decode, actor_info = pcall(json.decode, log.actor_charinfo)
-                if success_decode and actor_info and actor_info.firstname and actor_info.lastname then
-                    log.actor_name = ('%s %s'):format(actor_info.firstname, actor_info.lastname)
+            if log.actor_citizenid == 'ANONIMO' then
+                log.actor_name = 'Pessoa Não Identificada'
+            else
+                if log.actor_charinfo then
+                    local success_decode, actor_info = pcall(json.decode, log.actor_charinfo)
+                    if success_decode and actor_info and actor_info.firstname and actor_info.lastname then
+                        log.actor_name = ('%s %s'):format(actor_info.firstname, actor_info.lastname)
+                    else
+                        log.actor_name = 'Desconhecido'
+                    end
                 else
                     log.actor_name = 'Desconhecido'
                 end
-            else
-                log.actor_name = 'Desconhecido'
             end
             
-            -- Decodifica informações do alvo (se existir)
             if log.target_citizenid and log.target_charinfo then
                 local success_decode, target_info = pcall(json.decode, log.target_charinfo)
                 if success_decode and target_info and target_info.firstname and target_info.lastname then
@@ -334,7 +374,6 @@ function Database.GetChestLogStats(chestUUID)
     end
     
     local success, stats = pcall(function()
-        -- ATUALIZADO: Usando o campo 'timestamp' correto da sua tabela
         local result = MySQL.single.await([[
             SELECT 
                 COUNT(*) as total_logs,
@@ -361,27 +400,128 @@ function Database.GetChestLogStats(chestUUID)
     end
 end
 
-function Database.UpdateChestTier(chestUUID, tier, maxWeight, maxSlots)
-    if not chestUUID or not tier or not maxWeight or not maxSlots then
-        print('[RSG-CHEST][ERROR] Parâmetros inválidos para UpdateChestTier')
+function Database.RenameChest(chestUUID, customName)
+    if not chestUUID or type(chestUUID) ~= 'string' then
+        print('[RSG-CHEST][ERROR] UUID inválido fornecido para RenameChest')
+        return false
+    end
+    
+    if not customName or type(customName) ~= 'string' then
+        print('[RSG-CHEST][ERROR] Nome inválido fornecido para RenameChest')
         return false
     end
     
     local success = pcall(function()
         MySQL.update.await(
-            'UPDATE player_chests SET tier = ?, max_weight = ?, max_slots = ?, updated_at = CURRENT_TIMESTAMP WHERE chest_uuid = ?',
-            { tier, maxWeight, maxSlots, chestUUID }
+            'UPDATE player_chests SET custom_name = ?, updated_at = CURRENT_TIMESTAMP WHERE chest_uuid = ?',
+            { customName, chestUUID }
         )
     end)
     
     if success then
-        print(('[RSG-CHEST] Tier do baú %s atualizado para %d'):format(chestUUID, tier))
+        print(('[RSG-CHEST] Baú %s renomeado para: %s'):format(chestUUID, customName))
         return true
     else
-        print(('[RSG-CHEST][ERROR] Falha ao atualizar tier do baú %s'):format(chestUUID))
+        print(('[RSG-CHEST][ERROR] Falha ao renomear baú %s'):format(chestUUID))
         return false
     end
 end
+
+-- =================================================================
+-- SISTEMA DE DURABILIDADE
+-- =================================================================
+
+function Database.UpdateChestDurability(chestUUID, newDurability)
+    if not chestUUID or not newDurability then
+        print('[RSG-CHEST][ERROR] Parâmetros inválidos para UpdateChestDurability')
+        return false
+    end
+    
+    -- Garante que a durabilidade fique entre 0 e 100
+    newDurability = math.max(0, math.min(100, newDurability))
+    
+    local success = pcall(function()
+        MySQL.update.await(
+            'UPDATE player_chests SET durability = ?, updated_at = CURRENT_TIMESTAMP WHERE chest_uuid = ?',
+            { newDurability, chestUUID }
+        )
+    end)
+    
+    if success then
+        print(('[RSG-CHEST] Durabilidade do baú %s atualizada para: %d'):format(chestUUID, newDurability))
+        return true
+    else
+        print(('[RSG-CHEST][ERROR] Falha ao atualizar durabilidade do baú %s'):format(chestUUID))
+        return false
+    end
+end
+
+function Database.RepairChest(chestUUID, repairAmount)
+    if not chestUUID or not repairAmount then
+        print('[RSG-CHEST][ERROR] Parâmetros inválidos para RepairChest')
+        return false
+    end
+    
+    -- Busca durabilidade atual
+    local currentData = Database.GetChest(chestUUID)
+    if not currentData then return false end
+    
+    local currentDurability = currentData.durability or 100
+    local newDurability = math.min(100, currentDurability + repairAmount)
+    
+    return Database.UpdateChestDurability(chestUUID, newDurability)
+end
+
+function Database.DegradeChestDurability(chestUUID, degradeAmount)
+    if not chestUUID or not degradeAmount then return false end
+    
+    local currentData = Database.GetChest(chestUUID)
+    if not currentData then return false end
+    
+    local currentDurability = currentData.durability or 100
+    local newDurability = math.max(0, currentDurability - degradeAmount)
+    
+    return Database.UpdateChestDurability(chestUUID, newDurability)
+end
+
+
+
+-- =================================================================
+-- FUNÇÕES PARA CAIXA MISTERIOSA (BAULORE)
+-- =================================================================
+
+function Database.CreateLoreChest(chestUUID, coords, heading, model)
+    coords = NormalizeCoords(coords)
+    
+    local success = pcall(function()
+        MySQL.insert.await(
+            'INSERT INTO player_chests (chest_uuid, owner, coords, heading, model, items, tier, max_weight, max_slots, custom_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            { 
+                chestUUID, 
+                'SYSTEM',
+                json.encode(coords), 
+                heading or 0.0, 
+                model, 
+                json.encode({}), 
+                1, 
+                100000, 
+                50,
+                'Caixa Misteriosa'
+            }
+        )
+    end)
+    
+    if success then
+        print(('[RSG-CHEST] Caixa Misteriosa criada: %s'):format(chestUUID))
+        return true
+    else
+        print(('[RSG-CHEST][ERROR] Falha ao criar Caixa Misteriosa: %s'):format(chestUUID))
+        return false
+    end
+end
+
+-- ✅ TORNA A FUNÇÃO GLOBAL PARA USO EXTERNO
+Database.GenerateRandomString = GenerateRandomString
 
 -- =================================================================
 -- FUNÇÕES DE MANUTENÇÃO
@@ -392,7 +532,7 @@ function Database.CleanupOrphanChests()
         local result = MySQL.query.await([[
             DELETE pc FROM player_chests pc
             LEFT JOIN players p ON pc.owner = p.citizenid
-            WHERE p.citizenid IS NULL
+            WHERE p.citizenid IS NULL AND pc.owner != 'SYSTEM'
         ]])
         return result.affectedRows or 0
     end)
@@ -437,7 +577,6 @@ end
 CreateThread(function()
     Wait(1000)
     
-    -- Verifica se as tabelas necessárias existem
     local success = pcall(function()
         MySQL.query.await('SELECT 1 FROM player_chests LIMIT 1')
         MySQL.query.await('SELECT 1 FROM player_chests_logs LIMIT 1')
@@ -445,15 +584,10 @@ CreateThread(function()
     
     if success then
         print('[RSG-CHEST] Database inicializado com sucesso')
-        
-        -- Executa limpeza automática se configurada
-        if Config.AutoCleanupOrphans then
-            Database.CleanupOrphanChests()
-        end
     else
         print('[RSG-CHEST][ERROR] Tabelas do banco de dados não encontradas!')
-        print('[RSG-CHEST][INFO] Certifique-se de que as tabelas player_chests e player_chests_logs existem')
     end
 end)
 
+-- ✅ RETORNA O MÓDULO CORRETAMENTE
 return Database

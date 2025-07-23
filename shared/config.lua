@@ -31,6 +31,18 @@ Config.LockpickSettings = {
     FailSound = 'fail_sound', -- Som customizado para falha
 }
 
+
+-- Configurações de Durabilidade
+Config.RepairItem = 'repair_kit' -- Item necessário para reparar baús
+Config.DurabilitySystem = {
+    EnableAutoDecay = true, -- Degradação automática com o tempo
+    DecayInterval = 10000, -- 3600000, -- Intervalo de degradação (1 hora em ms)
+    DecayAmount = {1, 2}, -- Quantidade de degradação por intervalo (min, max)
+    MaxDurability = 100, -- Durabilidade máxima
+    MinDurability = 0, -- Durabilidade mínima
+    BrokenThreshold = 20, -- Durabilidade em que o baú fica "quebrado"
+}
+
 -- Configurações do Inventário
 Config.ChestSlots = 50
 Config.ChestWeight = 100000
@@ -174,6 +186,21 @@ Config.Lang = {
     ['prompt_rotate_left'] = 'Girar Esquerda',
     ['prompt_rotate_right'] = 'Girar Direita',
     ['prompt_group_name'] = 'Posicionar Baú',
+
+    ['durability_excellent'] = 'Excelente',
+    ['durability_good'] = 'Bom',
+    ['durability_fair'] = 'Regular',
+    ['durability_poor'] = 'Ruim',
+    ['durability_critical'] = 'Crítico',
+    ['chest_needs_repair'] = 'Este baú precisa de reparos',
+    ['chest_repaired'] = 'Baú reparado com sucesso',
+    ['repair_failed'] = 'Falha ao reparar o baú',
+
+    ['chest_broken'] = 'Este baú está danificado e precisa de reparos!',
+    ['chest_repaired'] = 'Baú reparado com sucesso!',
+    ['repair_needed'] = 'Kit de Reparo necessário para consertar este baú.',
+    ['repair_completed'] = 'Reparo concluído! Nova durabilidade: %d/100',
+    ['no_repair_needed'] = 'Este baú não precisa de reparos.',
 }
 
     

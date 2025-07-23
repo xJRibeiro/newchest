@@ -1,10 +1,19 @@
 local RSGCore = exports['rsg-core']:GetCoreObject()
-local Database = require 'server/database'
+--local Database = require 'server/database'
+local Database = {}
 
 local props = {}
 local ChestUsers = {}
 local LockpickCooldowns = {}
 local TemporaryAccess = {}
+
+
+CreateThread(function()
+    Wait(100) -- Pequeno delay para evitar problemas de carregamento
+    Database = require 'server/database'
+    print('[RSG-CHEST] Módulo database carregado com sucesso')
+end)
+
 
 -- =================================================================
 -- FUNÇÕES AUXILIARES MELHORADAS
@@ -189,15 +198,119 @@ RegisterNetEvent('rsg-chest:server:placeChest', function(coords, heading)
     end
 end)
 
+
+-- =================================================================
+-- SISTEMA DE REPARO DE BAÚS
+-- =================================================================
+
+RegisterNetEvent('jx:chest:requestRepair', function(chestUUID)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+
+    local chest = props[chestUUID]
+    
+    -- Verifica se é o dono
+    if chest.owner ~= Player.PlayerData.citizenid then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = Config.Lang['no_permission'] 
+        })
+    end
+
+    local currentDurability = chest.durability or 100
+    
+    if currentDurability >= 100 then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'inform', 
+            title = 'Baú em Perfeito Estado', 
+            description = 'Este baú não precisa de reparos.' 
+        })
+    end
+
+    -- Verifica se tem item de reparo
+    local hasRepairItem = exports['rsg-inventory']:GetItemByName(src, Config.RepairItem or 'repair_kit')
+    if not hasRepairItem or hasRepairItem.amount < 1 then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Item Necessário', 
+            description = 'Você precisa de um Kit de Reparo para consertar este baú.' 
+        })
+    end
+
+    -- Confirma reparo
+    TriggerClientEvent('jx:chest:confirmRepair', src, chestUUID, currentDurability)
+end)
+
+RegisterNetEvent('jx:chest:performRepair', function(chestUUID)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+
+    local chest = props[chestUUID]
+    
+    if chest.owner ~= Player.PlayerData.citizenid then return end
+
+    -- Remove item de reparo
+    if exports['rsg-inventory']:RemoveItem(src, Config.RepairItem or 'repair_kit', 1) then
+        local repairAmount = math.random(30, 50) -- Repara entre 30-50 pontos
+        
+        if Database.RepairChest(chestUUID, repairAmount) then
+            -- Atualiza cache
+            local newDurability = math.min(100, (chest.durability or 100) + repairAmount)
+            props[chestUUID].durability = newDurability
+            
+            -- Log da ação
+            Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'REPAIR', nil, 
+                ('Reparou o baú - Durabilidade: %d/100'):format(newDurability))
+            
+            TriggerClientEvent('ox_lib:notify', src, { 
+                type = 'success', 
+                title = 'Reparo Concluído', 
+                description = string.format('Baú reparado! Nova durabilidade: %d/100', newDurability)
+            })
+            
+            -- Atualiza props para todos os clientes
+            TriggerClientEvent('chest:updateProps', -1, props)
+        else
+            -- Devolve item se falhou
+            exports['rsg-inventory']:AddItem(src, Config.RepairItem or 'repair_kit', 1)
+            TriggerClientEvent('ox_lib:notify', src, { 
+                type = 'error', 
+                title = 'Erro', 
+                description = 'Falha ao reparar o baú.' 
+            })
+        end
+    end
+end)
+
+
 RegisterNetEvent('jx:chest:open', function(chestUUID)
     local src = source
     local Player = RSGCore.Functions.GetPlayer(src)
     
     if not Player or not chestUUID or not props[chestUUID] then return end
 
-    -- Validação de distância para abertura
     local chest = props[chestUUID]
-    if not ValidatePlayerDistance(src, chest.coords, 3.0) then
+    
+    -- ✅ CORREÇÃO: Durabilidade vem do banco de dados, não do item
+    local currentDurability = chest.durability or 100
+    if currentDurability < 20 then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Baú Danificado', 
+            description = string.format('Este baú está muito danificado para ser usado. Durabilidade: %d/100 (Mínimo: 20)', currentDurability)
+        })
+    end
+
+    -- Validação de distância
+    local playerCoords = GetEntityCoords(GetPlayerPed(src))
+    local chestCoords = vector3(chest.coords.x, chest.coords.y, chest.coords.z)
+    
+    if #(playerCoords - chestCoords) > 3.0 then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
@@ -229,7 +342,8 @@ RegisterNetEvent('jx:chest:open', function(chestUUID)
     end
 
     if not hasTempAccess then
-        Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'OPEN', nil, ('Abriu o baú de %s'):format(chest.owner))
+        Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'OPEN', nil, 
+            string.format('Abriu o baú (Durabilidade: %d/100)', currentDurability))
     end
 
     ChestUsers[chestUUID] = src
@@ -252,6 +366,9 @@ RegisterNetEvent('jx:chest:open', function(chestUUID)
     if hasTempAccess then TemporaryAccess[chestUUID] = nil end
     TriggerClientEvent('chest:opened', src, chestUUID)
 end)
+
+
+
 
 RegisterNetEvent('jx:chest:closeInventory', function(chestUUID)
     local src = source
@@ -568,6 +685,209 @@ RegisterNetEvent('jx:chest:processUpgrade', function(chestUUID)
     end
 end)
 
+
+-- =================================================================
+-- SISTEMA DE DURABILIDADE
+-- =================================================================
+
+-- Configurações de durabilidade
+local DurabilitySettings = {
+    degradationInterval = 10000, --1800000, -- 30 minutos em ms
+    baseDecay = 1, -- Perda base por intervalo
+    tierMultipliers = {
+        [1] = 1.5, -- Tier 1 perde mais rápido
+        [2] = 1.2,
+        [3] = 1.0,
+        [4] = 0.8,
+        [5] = 0.6  -- Tier 5 perde mais devagar
+    },
+    repairAmounts = {
+        basic = 15,    -- Kit básico
+        advanced = 35, -- Kit avançado
+        master = 60    -- Kit profissional
+    }
+}
+
+-- Thread para degradação de durabilidade
+CreateThread(function()
+    while true do
+        Wait(DurabilitySettings.degradationInterval)
+        
+        print('[RSG-CHEST] Iniciando ciclo de degradação de durabilidade...')
+        
+        for chestUUID, chest in pairs(props) do
+            if chest.owner ~= 'SYSTEM' and not chest.is_lore_chest then
+                local currentDurability = chest.durability or 100
+                
+                if currentDurability > 0 then
+                    local tier = chest.tier or 1
+                    local multiplier = DurabilitySettings.tierMultipliers[tier] or 1.0
+                    local decay = math.ceil(DurabilitySettings.baseDecay * multiplier)
+                    
+                    local newDurability = math.max(0, currentDurability - decay)
+                    
+                    -- Atualiza no banco e cache
+                    if Database.UpdateChestDurability(chestUUID, newDurability) then
+                        chest.durability = newDurability
+                        
+                        -- Notifica o dono se a durabilidade estiver baixa
+                        local owner = RSGCore.Functions.GetPlayerByCitizenId(chest.owner)
+                        if owner then
+                            local src = owner.PlayerData.source
+                            
+                            if newDurability <= 10 and currentDurability > 10 then
+                                TriggerClientEvent('ox_lib:notify', src, {
+                                    type = 'error',
+                                    title = 'Baú Danificado',
+                                    description = 'Seu baú está quase quebrado! Repare-o urgentemente.',
+                                    duration = 8000
+                                })
+                            elseif newDurability <= 25 and currentDurability > 25 then
+                                TriggerClientEvent('ox_lib:notify', src, {
+                                    type = 'warning',
+                                    title = 'Baú Degradando',
+                                    description = 'Seu baú precisa de reparos em breve.',
+                                    duration = 5000
+                                })
+                            end
+                        end
+                        
+                        -- Log da degradação
+                        if newDurability % 10 == 0 or newDurability <= 5 then
+                            Database.LogAction(chestUUID, 'SYSTEM', 'DURABILITY_DECAY', chest.owner,
+                                ('Durabilidade degradou para %d%%'):format(newDurability))
+                        end
+                    end
+                end
+            end
+        end
+        
+        print('[RSG-CHEST] Ciclo de degradação concluído.')
+    end
+end)
+
+-- =================================================================
+-- EVENTOS DE REPARO
+-- =================================================================
+
+RegisterNetEvent('jx:chest:repairChest', function(chestUUID, repairType)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+    
+    local chest = props[chestUUID]
+    
+    -- Verifica se é o dono
+    if chest.owner ~= Player.PlayerData.citizenid then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Apenas o dono pode reparar o baú.' 
+        })
+    end
+    
+    -- Verifica se precisa de reparo
+    local currentDurability = chest.durability or 100
+    if currentDurability >= 100 then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'inform', 
+            title = 'Baú em Perfeito Estado', 
+            description = 'Este baú não precisa de reparos.' 
+        })
+    end
+    
+    -- Define item e quantidade de reparo baseado no tipo
+    local repairItem, repairAmount
+    if repairType == 'basic' then
+        repairItem = 'repair_kit' --'repair_kit_basic'
+        repairAmount = DurabilitySettings.repairAmounts.basic
+    elseif repairType == 'advanced' then
+        repairItem = 'repair_kit_advanced'
+        repairAmount = DurabilitySettings.repairAmounts.advanced
+    elseif repairType == 'master' then
+        repairItem = 'repair_kit_master'
+        repairAmount = DurabilitySettings.repairAmounts.master
+    else
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Tipo de reparo inválido.' 
+        })
+    end
+    
+    -- Verifica se tem o item
+    local hasItem = exports['rsg-inventory']:GetItemByName(src, repairItem)
+    if not hasItem or hasItem.amount < 1 then
+        local itemLabel = GetItemLabel(repairItem)
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Item Necessário', 
+            description = ('Você precisa de um %s para fazer este reparo.'):format(itemLabel)
+        })
+    end
+    
+    -- Remove o item
+    if exports['rsg-inventory']:RemoveItem(src, repairItem, 1) then
+        -- Calcula nova durabilidade
+        local newDurability = math.min(100, currentDurability + repairAmount)
+        
+        -- Atualiza durabilidade
+        if Database.UpdateChestDurability(chestUUID, newDurability) then
+            chest.durability = newDurability
+            
+            -- Log do reparo
+            Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'REPAIR', nil,
+                ('Reparou baú de %d%% para %d%% usando %s'):format(currentDurability, newDurability, repairType))
+            
+            TriggerClientEvent('ox_lib:notify', src, { 
+                type = 'success', 
+                title = 'Reparo Concluído', 
+                description = ('Baú reparado! Durabilidade: %d%%'):format(newDurability)
+            })
+            
+            -- Atualiza para todos os clientes
+            TriggerClientEvent('jx:chest:updateChestDurability', -1, chestUUID, newDurability)
+        else
+            -- Devolve o item se falhou
+            exports['rsg-inventory']:AddItem(src, repairItem, 1)
+            TriggerClientEvent('ox_lib:notify', src, { 
+                type = 'error', 
+                title = 'Erro', 
+                description = 'Falha ao reparar o baú.' 
+            })
+        end
+    end
+end)
+
+RegisterNetEvent('jx:chest:checkDurability', function(chestUUID)
+    local src = source
+    local chest = props[chestUUID]
+    
+    if not chest then return end
+    
+    local durability = chest.durability or 100
+    local status
+    
+    if durability >= 80 then
+        status = '🟢 Excelente'
+    elseif durability >= 60 then
+        status = '🟡 Bom'
+    elseif durability >= 40 then
+        status = '🟠 Regular'
+    elseif durability >= 20 then
+        status = '🔴 Ruim'
+    else
+        status = '💀 Crítico'
+    end
+    
+    TriggerClientEvent('ox_lib:notify', src, {
+        type = 'inform',
+        title = 'Estado do Baú',
+        description = ('Durabilidade: %d%%\n%s'):format(durability, status),
+        duration = 5000
+    })
+end)
 
 RegisterNetEvent('jx:chest:requestLockpick', function(chestUUID)
     local src = source
@@ -999,6 +1319,53 @@ CreateThread(function()
         end
     end
 end)
+
+
+-- =================================================================
+-- SISTEMA DE DEGRADAÇÃO AUTOMÁTICA DE DURABILIDADE
+-- =================================================================
+
+if Config.DurabilitySystem and Config.DurabilitySystem.EnableAutoDecay then
+    CreateThread(function()
+        while true do
+            Wait(Config.DurabilitySystem.DecayInterval) -- Padrão: 1 hora
+            
+            local decayCount = 0
+            for chestUUID, chest in pairs(props) do
+                if chest.owner ~= 'SYSTEM' then -- Não degrada caixas misteriosas
+                    local currentDurability = chest.durability or 100
+                    
+                    if currentDurability > 0 then
+                        local decayAmount = math.random(
+                            Config.DurabilitySystem.DecayAmount[1], 
+                            Config.DurabilitySystem.DecayAmount[2]
+                        )
+                        
+                        local newDurability = math.max(0, currentDurability - decayAmount)
+                        
+                        if Database.UpdateChestDurability(chestUUID, newDurability) then
+                            props[chestUUID].durability = newDurability
+                            decayCount = decayCount + 1
+                            
+                            -- Log apenas quando fica crítico
+                            if newDurability <= 20 and currentDurability > 20 then
+                                Database.LogAction(chestUUID, 'SYSTEM', 'DURABILITY_CRITICAL', nil, 
+                                    ('Baú atingiu estado crítico - Durabilidade: %d/100'):format(newDurability))
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if decayCount > 0 then
+                print(('[RSG-CHEST] Degradação automática: %d baús afetados'):format(decayCount))
+                -- Atualiza props para todos os clientes
+                TriggerClientEvent('chest:updateProps', -1, props)
+            end
+        end
+    end)
+end
+
 
 AddEventHandler('playerDropped', function(reason)
     local src = source

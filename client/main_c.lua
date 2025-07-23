@@ -215,6 +215,27 @@ function AddTargetToProp(entity, chestUUID)
             end
         })
         
+        local currentDurability = propData.durability or 100
+            if currentDurability < 100 then
+                table.insert(options, {
+                    disable = true,
+                    icon = "fas fa-wrench",
+                    label = string.format("Durabildade (%d/100)", currentDurability),
+                  
+                })
+            end
+        
+        -- ✅ OPÇÃO: Reparar Baú (só aparece se durabilidade < 100)
+        local currentDurability = propData.durability or 100
+        if currentDurability < 100 then
+            table.insert(options, {
+                icon = "fas fa-tools",
+                label = "Reparar Baú",
+                action = function() 
+                    ShowRepairMenu(chestUUID, currentDurability)
+                end
+            })
+        end
 
         local currentTier = propData.tier or 1
         if Config.Tiers[currentTier + 1] then
@@ -286,6 +307,38 @@ function AddTargetToProp(entity, chestUUID)
     
     return false
 end
+
+
+
+-- =================================================================
+-- CONFIRMAÇÃO DE REPARO
+-- =================================================================
+
+RegisterNetEvent('jx:chest:confirmRepair', function(chestUUID, currentDurability)
+    local repairCost = 1
+    local estimatedRepair = math.random(30, 50)
+    local finalDurability = math.min(100, currentDurability + estimatedRepair)
+    
+    local confirmDialog = lib.alertDialog({
+        header = 'Reparar Baú',
+        content = string.format(
+            '**Durabilidade Atual:** %d/100\n' ..
+            '**Durabilidade Estimada:** %d/100\n\n' ..
+            '**Custo:** %d x Kit de Reparo\n\n' ..
+            'Deseja prosseguir com o reparo?',
+            currentDurability,
+            finalDurability,
+            repairCost
+        ),
+        centered = true,
+        cancel = true,
+        size = 'md'
+    })
+    
+    if confirmDialog == 'confirm' then
+        TriggerServerEvent('jx:chest:performRepair', chestUUID)
+    end
+end)
 
 -- =================================================================
 -- FUNÇÃO PARA MOSTRAR REGISTROS DO JOGADOR
@@ -757,6 +810,161 @@ CreateThread(function()
         print('[RSG-CHEST] Cache de modelos limpo automaticamente')
     end
 end)
+
+-- =================================================================
+-- SISTEMA DE REPARO
+-- =================================================================
+
+function ShowRepairMenu(chestUUID, currentDurability)
+    local options = {
+        {
+            title = 'Estado Atual',
+            description = ('Durabilidade: %d%%'):format(currentDurability),
+            icon = 'info-circle',
+            disabled = true
+        },
+
+        {
+            title = 'Kit Básico de Reparo',
+            description = 'Restaura 15% de durabilidade',
+            icon = 'hammer',
+            onSelect = function()
+                TriggerServerEvent('jx:chest:repairChest', chestUUID, 'basic')
+            end
+        },
+        {
+            title = 'Kit Avançado de Reparo',
+            description = 'Restaura 35% de durabilidade',
+            icon = 'wrench',
+            onSelect = function()
+                TriggerServerEvent('jx:chest:repairChest', chestUUID, 'advanced')
+            end
+        },
+        {
+            title = 'Kit Profissional de Reparo',
+            description = 'Restaura 60% de durabilidade',
+            icon = 'cogs',
+            onSelect = function()
+                TriggerServerEvent('jx:chest:repairChest', chestUUID, 'master')
+            end
+        }
+    }
+    
+    lib.registerContext({
+        id = 'chest_repair_menu',
+        title = 'Reparar Baú',
+        options = options
+    })
+    lib.showContext('chest_repair_menu')
+end
+
+-- Event handler para atualizar durabilidade
+RegisterNetEvent('jx:chest:updateChestDurability', function(chestUUID, newDurability)
+    if localProps[chestUUID] then
+        localProps[chestUUID].durability = newDurability
+        
+        -- Atualiza visualmente se necessário
+        local propEntity = propEntities[chestUUID]
+        if propEntity and DoesEntityExist(propEntity) then
+            -- Aplicar efeito visual baseado na durabilidade
+            ApplyDurabilityVisualEffect(propEntity, newDurability)
+        end
+    end
+end)
+
+function ApplyDurabilityVisualEffect(entity, durability)
+    if not DoesEntityExist(entity) then return end
+    
+    -- Efeito visual baseado na durabilidade
+    if durability <= 10 then
+        -- Muito danificado - transparência e efeito vermelho
+        SetEntityAlpha(entity, 180, false)
+    elseif durability <= 25 then
+        -- Danificado - transparência leve
+        SetEntityAlpha(entity, 200, false)
+    else
+        -- Normal
+        SetEntityAlpha(entity, 255, false)
+    end
+end
+
+-- =================================================================
+-- SISTEMA DE REPARO
+-- =================================================================
+
+function ShowRepairMenu(chestUUID, currentDurability)
+    local options = {
+        {
+            title = 'Estado Atual',
+            description = ('Durabilidade: %d%%'):format(currentDurability),
+            icon = 'info-circle',
+            disabled = true
+        },
+
+        {
+            title = 'Kit Básico de Reparo',
+            description = 'Restaura 15% de durabilidade',
+            icon = 'hammer',
+            onSelect = function()
+                TriggerServerEvent('jx:chest:repairChest', chestUUID, 'basic')
+            end
+        },
+        {
+            title = 'Kit Avançado de Reparo',
+            description = 'Restaura 35% de durabilidade',
+            icon = 'wrench',
+            onSelect = function()
+                TriggerServerEvent('jx:chest:repairChest', chestUUID, 'advanced')
+            end
+        },
+        {
+            title = 'Kit Profissional de Reparo',
+            description = 'Restaura 60% de durabilidade',
+            icon = 'cogs',
+            onSelect = function()
+                TriggerServerEvent('jx:chest:repairChest', chestUUID, 'master')
+            end
+        }
+    }
+    
+    lib.registerContext({
+        id = 'chest_repair_menu',
+        title = 'Reparar Baú',
+        options = options
+    })
+    lib.showContext('chest_repair_menu')
+end
+
+-- Event handler para atualizar durabilidade
+RegisterNetEvent('jx:chest:updateChestDurability', function(chestUUID, newDurability)
+    if localProps[chestUUID] then
+        localProps[chestUUID].durability = newDurability
+        
+        -- Atualiza visualmente se necessário
+        local propEntity = propEntities[chestUUID]
+        if propEntity and DoesEntityExist(propEntity) then
+            -- Aplicar efeito visual baseado na durabilidade
+            ApplyDurabilityVisualEffect(propEntity, newDurability)
+        end
+    end
+end)
+
+function ApplyDurabilityVisualEffect(entity, durability)
+    if not DoesEntityExist(entity) then return end
+    
+    -- Efeito visual baseado na durabilidade
+    if durability <= 10 then
+        -- Muito danificado - transparência e efeito vermelho
+        SetEntityAlpha(entity, 180, false)
+    elseif durability <= 25 then
+        -- Danificado - transparência leve
+        SetEntityAlpha(entity, 200, false)
+    else
+        -- Normal
+        SetEntityAlpha(entity, 255, false)
+    end
+end
+
 
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() == resourceName then
