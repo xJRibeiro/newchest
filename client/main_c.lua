@@ -215,18 +215,45 @@ function AddTargetToProp(entity, chestUUID)
             end
         })
         
-        -- ✅ MELHORAR BAÚ - COM VERIFICAÇÃO INTELIGENTE DE ITEM
+
         local currentTier = propData.tier or 1
         if Config.Tiers[currentTier + 1] then
             table.insert(options, {
                 icon = "fas fa-arrow-alt-circle-up", 
                 label = "Melhorar Baú",
                 action = function()
-                    -- Envia pedido ao servidor que fará todas as verificações
-                    TriggerServerEvent('jx:chest:attemptUpgrade', chestUUID)
+                    local nextTier = currentTier + 1
+                    local nextTierData = Config.Tiers[nextTier]
+                    local currentTierData = Config.Tiers[currentTier]
+                    
+                    -- Converter peso de gramas para kg
+                    local currentWeightKg = string.format("%.1f", currentTierData.weight / 1000)
+                    local nextWeightKg = string.format("%.1f", nextTierData.weight / 1000)
+                    
+                    local upgradeContent = string.format(
+                        'Deseja melhorar seu baú para **%s**?\n\n' ..
+                        '**Upgrade:**\n' ..
+                        '\nPeso: %s kg → **%s kg**\n' ..
+                        '\nSlots: %d → **%d**\n\n' ..
+                        'Esta ação consumirá um kit de upgrade.',
+                        nextTierData.label,
+                        currentWeightKg, nextWeightKg,
+                        currentTierData.slots, nextTierData.slots
+                    )
+                    
+                    if lib.alertDialog({ 
+                        header = 'Melhorar Baú', 
+                        content = upgradeContent,
+                        centered = true, 
+                        cancel = true,
+                        size = 'md'
+                    }) == 'confirm' then
+                        TriggerServerEvent('jx:chest:upgrade', chestUUID)
+                    end
                 end
             })
         end
+
         
         table.insert(options, { 
             icon = "fas fa-trash-alt", 
@@ -238,17 +265,12 @@ function AddTargetToProp(entity, chestUUID)
                     centered = true, 
                     cancel = true 
                 }) == 'confirm' then
-                    if lib.progressBar({ 
-                        duration = Config.RemovalTime, 
-                        label = "Removendo baú...", 
-                        useWhileDead = false, 
-                        canCancel = true 
-                    }) then
-                        TriggerServerEvent('jx:chest:remove', chestUUID)
-                    end
+                    -- ✅ IMPLEMENTAR ANIMAÇÃO DE REMOÇÃO
+                    RemoveChestWithAnimation(chestUUID)
                 end
             end 
         })
+
     elseif not hasPermission then
         table.insert(options, {
             icon = "fas fa-user-secret", 
@@ -362,6 +384,191 @@ RegisterNetEvent('jx:chest:confirmUpgrade', function(chestUUID, itemAmount, item
         TriggerServerEvent('jx:chest:upgrade', chestUUID)
     end
 end)
+
+-- =================================================================
+-- FUNÇÃO DE UPGRADE COM ANIMAÇÃO
+-- =================================================================
+
+function UpgradeChestWithAnimation(chestUUID)
+    local ped = PlayerPedId()
+    
+    -- ✅ ANIMAÇÃO ESPECÍFICA PARA UPGRADE
+    local animDict = "amb_work@world_human_crouch_inspect@male_a@base"
+    local animName = "base"
+    
+    -- Animações de fallback
+    local animations = {
+        {dict = animDict, anim = animName},
+        {dict = "script_re@craft@crafting_fallback", anim = "craft_trans_kneel_to_squat"},
+        {dict = "amb_work@world_human_hammer@male_a@base", anim = "base"}
+    }
+    
+    local animLoaded = false
+
+    FreezeEntityPosition(ped, true)
+
+    -- ✅ CARREGAR ANIMAÇÃO ESPECIFICADA
+    for _, animData in ipairs(animations) do
+        RequestAnimDict(animData.dict)
+        local attempts = 0
+        while not HasAnimDictLoaded(animData.dict) and attempts < 50 do
+            Wait(10)
+            attempts = attempts + 1
+        end
+        
+        if HasAnimDictLoaded(animData.dict) then
+            TaskPlayAnim(ped, animData.dict, animData.anim, 8.0, -8.0, -1, 1, 0, false, false, false)
+            animLoaded = true
+            print(('[RSG-CHEST] Animação de upgrade carregada: %s -> %s'):format(animData.dict, animData.anim))
+            break
+        end
+    end
+    
+    -- ✅ FALLBACK PARA CENÁRIO SE ANIMAÇÕES FALHAREM
+    if not animLoaded then
+        print('[RSG-CHEST] Usando cenário como fallback para upgrade')
+        TaskStartScenarioInPlace(ped, "WORLD_HUMAN_CROUCH_INSPECT", 0, true)
+    end
+
+    Wait(500) -- Tempo para animação começar
+
+    -- ✅ SOM DE TRABALHO/UPGRADE
+    local duration = 3000 -- 3 segundos para upgrade
+    local interval = 800
+    local elapsed = 0
+
+    CreateThread(function()
+        while elapsed < duration do
+            -- Som de ferramentas/trabalho
+            TriggerServerEvent("InteractSound_SV:PlayOnSource", "hammer", 0.4)
+            Wait(interval)
+            elapsed = elapsed + interval
+        end
+    end)
+
+    -- ✅ PROGRESS BAR COM POSSIBILIDADE DE CANCELAR
+    local success = lib.progressBar({
+        duration = duration,
+        label = "Melhorando baú...",
+        useWhileDead = false,
+        canCancel = true,
+        disable = {
+            car = true,
+            move = true,
+            combat = true,
+        }
+    })
+
+    -- ✅ LIMPEZA DAS ANIMAÇÕES
+    ClearPedTasks(ped)
+    ClearPedSecondaryTask(ped)
+    StopAnimTask(ped, "", "", 1.0)
+    FreezeEntityPosition(ped, false)
+
+    -- ✅ PROCESSAR RESULTADO
+    if success then
+        TriggerServerEvent('jx:chest:processUpgrade', chestUUID)
+    else
+        lib.notify({ 
+            type = 'inform', 
+            title = 'Cancelado', 
+            description = 'Upgrade do baú cancelado.' 
+        })
+    end
+end
+
+-- ✅ REGISTRAR EVENTO PARA INICIAR ANIMAÇÃO
+RegisterNetEvent('jx:chest:startUpgradeAnimation', function(chestUUID)
+    UpgradeChestWithAnimation(chestUUID)
+end)
+
+
+-- =================================================================
+-- FUNÇÃO DE REMOÇÃO COM ANIMAÇÃO
+-- =================================================================
+
+function RemoveChestWithAnimation(chestUUID)
+    local ped = PlayerPedId()
+    
+    -- ✅ ANIMAÇÕES TESTADAS PARA REMOÇÃO/DESMONTAGEM
+    local animations = {
+
+        {dict = "amb_work@world_human_crouch_inspect@male_a@base", anim = "base"},
+    }
+    
+    local animLoaded = false
+
+    FreezeEntityPosition(ped, true)
+
+    -- ✅ TENTAR CARREGAR ANIMAÇÕES EM ORDEM DE PREFERÊNCIA
+    for _, animData in ipairs(animations) do
+        RequestAnimDict(animData.dict)
+        local attempts = 0
+        while not HasAnimDictLoaded(animData.dict) and attempts < 50 do
+            Wait(10)
+            attempts = attempts + 1
+        end
+        
+        if HasAnimDictLoaded(animData.dict) then
+            TaskPlayAnim(ped, animData.dict, animData.anim, 8.0, -8.0, -1, 1, 0, false, false, false)
+            animLoaded = true
+            print(('[RSG-CHEST] Animação de remoção carregada: %s -> %s'):format(animData.dict, animData.anim))
+            break
+        end
+    end
+    
+    -- ✅ FALLBACK PARA CENÁRIO SE ANIMAÇÕES FALHAREM
+    if not animLoaded then
+        print('[RSG-CHEST] Usando cenário como fallback para remoção')
+        TaskStartScenarioInPlace(ped, "WORLD_HUMAN_CROUCH_INSPECT", 0, true)
+    end
+
+    Wait(100) -- Dar tempo para a animação começar
+
+    -- ✅ SOM DE MARTELO/DESMONTAGEM DURANTE A REMOÇÃO
+    local duration = Config.RemovalTime or 2000
+    local interval = 800 -- Intervalo entre marteladas
+    local elapsed = 0
+
+    CreateThread(function()
+        while elapsed < duration do
+            TriggerServerEvent("InteractSound_SV:PlayOnSource", "hammer", 0.5)
+            Wait(interval)
+            elapsed = elapsed + interval
+        end
+    end)
+
+    -- ✅ PROGRESS BAR SEM CONFLITO COM ANIMAÇÃO
+    local success = lib.progressBar({
+        duration = duration,
+        label = "Removendo baú...",
+        useWhileDead = false,
+        canCancel = true,
+        disable = {
+            car = true,
+            move = true,
+            combat = true,
+        }
+    })
+
+    -- ✅ LIMPEZA COMPLETA DAS ANIMAÇÕES
+    ClearPedTasks(ped)
+    ClearPedSecondaryTask(ped)
+    StopAnimTask(ped, "", "", 1.0)
+    FreezeEntityPosition(ped, false)
+
+    -- ✅ PROCESSAR RESULTADO
+    if success then
+        TriggerServerEvent('jx:chest:remove', chestUUID)
+    else
+        lib.notify({ 
+            type = 'inform', 
+            title = 'Cancelado', 
+            description = 'Remoção do baú cancelada.' 
+        })
+    end
+end
+
 
 -- =================================================================
 -- EVENT HANDLERS OTIMIZADOS

@@ -476,7 +476,7 @@ RegisterNetEvent('jx:chest:upgrade', function(chestUUID)
     local chest = props[chestUUID]
     
     -- Validação de propriedade
-    if not ValidateChestAccess(chestUUID, src) then
+    if chest.owner ~= Player.PlayerData.citizenid then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
@@ -485,7 +485,10 @@ RegisterNetEvent('jx:chest:upgrade', function(chestUUID)
     end
 
     -- Validação de distância
-    if not ValidatePlayerDistance(src, chest.coords, 3.0) then
+    local playerCoords = GetEntityCoords(GetPlayerPed(src))
+    local chestCoords = vector3(chest.coords.x, chest.coords.y, chest.coords.z)
+    
+    if #(playerCoords - chestCoords) > 3.0 then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
@@ -505,14 +508,37 @@ RegisterNetEvent('jx:chest:upgrade', function(chestUUID)
     end
 
     -- Validação de item de upgrade
-    if not ValidateItemExists(src, Config.UpgradeItem, 1) then
+    local hasUpgradeItem = exports['rsg-inventory']:GetItemByName(src, Config.UpgradeItem)
+    if not hasUpgradeItem or hasUpgradeItem.amount < 1 then
         return TriggerClientEvent('ox_lib:notify', src, { 
             type = 'error', 
             title = 'Erro', 
-            description = ('Você não possui o item necessário.')
+            description = 'Você não possui o item necessário para melhorar este baú.'
         })
     end
 
+    -- ✅ TRIGGER EVENTO CLIENTE PARA ANIMAÇÃO
+    TriggerClientEvent('jx:chest:startUpgradeAnimation', src, chestUUID)
+end)
+
+-- ✅ NOVO EVENTO: Processar upgrade após animação
+RegisterNetEvent('jx:chest:processUpgrade', function(chestUUID)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+
+    local chest = props[chestUUID]
+    
+    -- Revalidar tudo
+    if chest.owner ~= Player.PlayerData.citizenid then return end
+    
+    local currentTier = chest.tier or 1
+    local nextTier = currentTier + 1
+    
+    if not Config.Tiers[nextTier] then return end
+
+    -- Remove o item e processa o upgrade
     if exports['rsg-inventory']:RemoveItem(src, Config.UpgradeItem, 1) then
         local newTierData = Config.Tiers[nextTier]
 
@@ -520,18 +546,28 @@ RegisterNetEvent('jx:chest:upgrade', function(chestUUID)
             nextTier, newTierData.weight, newTierData.slots, chestUUID 
         })
 
-        props[chestUUID].tier, props[chestUUID].max_weight, props[chestUUID].max_slots = nextTier, newTierData.weight, newTierData.slots
+        props[chestUUID].tier = nextTier
+        props[chestUUID].max_weight = newTierData.weight
+        props[chestUUID].max_slots = newTierData.slots
 
         Database.LogAction(chestUUID, Player.PlayerData.citizenid, 'UPGRADE', nil, ('Melhorou para o Nível %d'):format(nextTier))
 
         TriggerClientEvent('ox_lib:notify', src, { 
             type = 'success', 
             title = 'Sucesso', 
-            description = Config.Lang['chest_upgraded'] 
+            description = string.format('Baú melhorado para %s!', newTierData.label)
         })
+        
         TriggerClientEvent('jx:chest:updateSharedList', -1, chestUUID, props[chestUUID].shared_with)
+    else
+        TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Falha ao processar upgrade do baú.'
+        })
     end
 end)
+
 
 RegisterNetEvent('jx:chest:requestLockpick', function(chestUUID)
     local src = source

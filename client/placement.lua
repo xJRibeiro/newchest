@@ -375,20 +375,45 @@ end
 function PlaceChest(coords, heading)
     PlacementMode = false
     local ped = PlayerPedId()
-    local animScenario = "WORLD_HUMAN_HAMMERING"
+    
+    -- ✅ ANIMAÇÕES QUE FUNCIONAM NO RDR3
+    local animations = {
+        {dict = "amb_work@world_human_crouch_inspect@male_a@base", anim = "base"},
+        {dict = "amb_work@world_human_hammer@male_a@base", anim = "base"},
+        {dict = "script_re@craft@crafting_fallback", anim = "craft_trans_kneel_to_squat"}
+    }
+    
+    local animLoaded = false
 
-    if not RequestModelSafe(joaat(Config.ChestProp), 5000) then
-        lib.notify({ title = 'Erro', description = 'Falha ao carregar modelo do baú.', type = 'error' })
-        return
-    end
+    RequestModel(joaat(Config.ChestProp))
+    while not HasModelLoaded(joaat(Config.ChestProp)) do Wait(10) end
 
     FreezeEntityPosition(ped, true)
 
-    -- Inicia a animação de martelar
-    TaskStartScenarioInPlace(ped, animScenario, 0, true)
-    Wait(500)
+    -- ✅ TENTAR CARREGAR ANIMAÇÕES EM ORDEM
+    for _, animData in ipairs(animations) do
+        RequestAnimDict(animData.dict)
+        local attempts = 0
+        while not HasAnimDictLoaded(animData.dict) and attempts < 50 do
+            Wait(10)
+            attempts = attempts + 1
+        end
+        
+        if HasAnimDictLoaded(animData.dict) then
+            TaskPlayAnim(ped, animData.dict, animData.anim, 8.0, -8.0, -1, 1, 0, false, false, false)
+            animLoaded = true
+            break
+        end
+    end
+    
+    -- ✅ FALLBACK PARA CENÁRIO SE ANIMAÇÕES FALHAREM
+    if not animLoaded then
+        TaskStartScenarioInPlace(ped, "WORLD_HUMAN_CROUCH_INSPECT", 0, true)
+    end
 
-    -- Som de martelada com controle de duração
+    Wait(500) -- Dar tempo para a animação começar
+
+    -- Som de martelada
     local duration = Config.PlacementTime or 3000
     local interval = 900
     local elapsed = 0
@@ -414,6 +439,8 @@ function PlaceChest(coords, heading)
     })
 
     ClearPedTasks(ped)
+    ClearPedSecondaryTask(ped)
+    StopAnimTask(ped, "", "", 1.0)
     FreezeEntityPosition(ped, false)
 
     if success then
@@ -427,6 +454,7 @@ function PlaceChest(coords, heading)
         CancelPlacement()
     end
 end
+
 
 function CancelPlacement()
     PlacementMode = false
