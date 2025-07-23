@@ -1,35 +1,81 @@
 local RSGCore = exports['rsg-core']:GetCoreObject()
 
--- Variáveis de estado do cliente
+-- =================================================================
+-- VARIÁVEIS E CACHE OTIMIZADOS
+-- =================================================================
+
 local propEntities, localProps, currentOpenChest = {}, {}, nil
+local PlayerData = {}
+local ModelCache = {}
 
 -- =================================================================
--- FUNÇÕES DE LÓGICA E INTERFACE
+-- FUNÇÕES AUXILIARES OTIMIZADAS
 -- =================================================================
 
---- Pede ao servidor a lista de jogadores próximos com nomes reais para o menu de compartilhamento.
+local function RequestModelSafe(model, timeout)
+    timeout = timeout or 10000
+    if ModelCache[model] then return true end
+    
+    RequestModel(model)
+    local startTime = GetGameTimer()
+    
+    while not HasModelLoaded(model) do
+        if GetGameTimer() - startTime > timeout then
+            print(('[RSG-CHEST][ERROR] Timeout ao carregar modelo: %s'):format(model))
+            return false
+        end
+        Wait(50)
+    end
+    
+    ModelCache[model] = true
+    return true
+end
+
+local function ValidateDistance(coords1, coords2, maxDistance)
+    if not coords1 or not coords2 then return false end
+    return #(coords1 - coords2) <= maxDistance
+end
+
+local function SafeDeleteEntity(entity)
+    if DoesEntityExist(entity) then
+        pcall(function() exports['rsg-target']:RemoveTargetEntity(entity) end)
+        DeleteEntity(entity)
+        return true
+    end
+    return false
+end
+
+-- =================================================================
+-- FUNÇÕES PRINCIPAIS MELHORADAS
+-- =================================================================
+
 function OpenShareMenu(chestUUID)
+    if not chestUUID or not localProps[chestUUID] then
+        print(('[RSG-CHEST][WARNING] OpenShareMenu: chestUUID inválido'))
+        return
+    end
+    
     local nearbyPlayerIds = {}
     local playerCoords = GetEntityCoords(PlayerPedId())
-
+    local maxDistance = Config.ShareDistance or 5.0
+    
     for _, id in ipairs(GetActivePlayers()) do
         local targetPed = GetPlayerPed(id)
         if id ~= PlayerId() and DoesEntityExist(targetPed) then
-            if #(playerCoords - GetEntityCoords(targetPed)) < (Config.ShareDistance or 5.0) then
+            if ValidateDistance(playerCoords, GetEntityCoords(targetPed), maxDistance) then
                 table.insert(nearbyPlayerIds, GetPlayerServerId(id))
             end
         end
     end
-
+    
     if #nearbyPlayerIds == 0 then
         lib.notify({ type = 'warning', title = 'Aviso', description = 'Nenhum jogador próximo encontrado.' })
         return
     end
-
+    
     TriggerServerEvent('jx:chest:getNearbyPlayerNames', chestUUID, nearbyPlayerIds)
 end
 
---- Abre o menu para o dono do baú remover o acesso de jogadores compartilhados.
 function OpenManageShareMenu(chestUUID)
     local propData = localProps[chestUUID]
     if not propData or not propData.shared_with or #propData.shared_with == 0 then
@@ -44,7 +90,12 @@ function OpenManageShareMenu(chestUUID)
             description = "Citizen ID: " .. sharedInfo.citizenid,
             icon = "fas fa-user-minus",
             onSelect = function()
-                if lib.alertDialog({ header = 'Remover Acesso', content = ('Tem certeza que deseja remover o acesso de %s?'):format(sharedInfo.name), centered = true, cancel = true }) == 'confirm' then
+                if lib.alertDialog({ 
+                    header = 'Remover Acesso', 
+                    content = ('Tem certeza que deseja remover o acesso de %s?'):format(sharedInfo.name), 
+                    centered = true, 
+                    cancel = true 
+                }) == 'confirm' then
                     TriggerServerEvent('jx:chest:unshare', chestUUID, sharedInfo.citizenid)
                 end
             end
@@ -55,7 +106,6 @@ function OpenManageShareMenu(chestUUID)
     lib.showContext('chest_manage_share_menu')
 end
 
---- Função central para fechar o baú e limpar o estado do cliente.
 local function CloseCurrentChest()
     local chestToClose = currentOpenChest
     currentOpenChest = nil
@@ -63,99 +113,166 @@ local function CloseCurrentChest()
     TriggerServerEvent('jx:chest:closeInventory', chestToClose)
 end
 
---- Limpa todos os props de baús do mundo do jogo.
 function ClearAllProps()
-    for _, entity in pairs(propEntities) do
-        if DoesEntityExist(entity) then
-            pcall(function() exports['rsg-target']:RemoveTargetEntity(entity) end)
-            DeleteEntity(entity)
-        end
+    for chestUUID, entity in pairs(propEntities) do
+        SafeDeleteEntity(entity)
+        propEntities[chestUUID] = nil
     end
-    propEntities, localProps = {}, {}
+    localProps = {}
+    print('[RSG-CHEST] Props limpos com segurança')
 end
 
---- Adiciona as opções de interação ao rsg-target com base nas permissões do jogador.
 function AddTargetToProp(entity, chestUUID)
-    local options, PlayerData, propData = {}, RSGCore.Functions.GetPlayerData(), localProps[chestUUID]
-    if not PlayerData or not propData then return end
+    if not DoesEntityExist(entity) or not chestUUID or not localProps[chestUUID] then
+        print(('[RSG-CHEST][WARNING] AddTargetToProp: parâmetros inválidos'))
+        return false
+    end
+    
+    local options, propData = {}, localProps[chestUUID]
+    
+    if not PlayerData or not PlayerData.citizenid then
+        PlayerData = RSGCore.Functions.GetPlayerData()
+        if not PlayerData or not PlayerData.citizenid then
+            print(('[RSG-CHEST][WARNING] PlayerData não encontrado'))
+            return false
+        end
+    end
     
     local isOwner = propData.owner == PlayerData.citizenid
     local hasPermission = isOwner
+    
+    -- Verifica permissão compartilhada
     if not hasPermission and propData.shared_with then
         for _, sharedInfo in ipairs(propData.shared_with) do
-            if type(sharedInfo) == 'table' and sharedInfo.citizenid == PlayerData.citizenid then hasPermission = true; break end
+            if type(sharedInfo) == 'table' and sharedInfo.citizenid == PlayerData.citizenid then 
+                hasPermission = true
+                break 
+            end
         end
     end
-
-    -- Opções para quem tem permissão (dono ou compartilhado)
+    
+    -- Opções baseadas em permissões
     if hasPermission then
-        table.insert(options, { icon = "fas fa-box-open", label = "Abrir Baú", action = function() TriggerServerEvent('jx:chest:open', chestUUID) end })
+        table.insert(options, { 
+            icon = "fas fa-box-open", 
+            label = "Abrir Baú", 
+            action = function() TriggerServerEvent('jx:chest:open', chestUUID) end 
+        })
     end
-
-    -- Opções exclusivas para o DONO
+    
     if isOwner then
-        table.insert(options, { icon = "fas fa-share-alt", label = "Compartilhar Baú", action = function() OpenShareMenu(chestUUID) end })
-        table.insert(options, { icon = "fas fa-users-cog", label = "Gerenciar Acesso", action = function() OpenManageShareMenu(chestUUID) end })
+        table.insert(options, { 
+            icon = "fas fa-share-alt", 
+            label = "Compartilhar Baú", 
+            action = function() OpenShareMenu(chestUUID) end 
+        })
+        
+        table.insert(options, { 
+            icon = "fas fa-users-cog", 
+            label = "Gerenciar Acesso", 
+            action = function() OpenManageShareMenu(chestUUID) end 
+        })
         
         local currentTier = propData.tier or 1
-        if Config.Tiers[currentTier + 1] then -- Só mostra se houver um próximo nível de upgrade
+        if Config.Tiers[currentTier + 1] then
             table.insert(options, {
-                icon = "fas fa-arrow-alt-circle-up", label = "Melhorar Baú",
+                icon = "fas fa-arrow-alt-circle-up", 
+                label = "Melhorar Baú",
                 action = function()
-                    if lib.alertDialog({ header = 'Melhorar Baú', content = 'Deseja usar um kit para melhorar este baú?', centered = true, cancel = true }) == 'confirm' then
+                    if lib.alertDialog({ 
+                        header = 'Melhorar Baú', 
+                        content = 'Deseja usar um kit para melhorar este baú?', 
+                        centered = true, 
+                        cancel = true 
+                    }) == 'confirm' then
                         TriggerServerEvent('jx:chest:upgrade', chestUUID)
                     end
                 end
             })
         end
-
-        table.insert(options, { icon = "fas fa-trash-alt", label = "Remover Baú", action = function()
-            if lib.alertDialog({ header = 'Remover Baú', content = 'Tem certeza? O baú deve estar vazio.', centered = true, cancel = true }) == 'confirm' then
-                if lib.progressBar({ duration = Config.RemovalTime, label = "Removendo baú...", useWhileDead = false, canCancel = true }) then
-                    TriggerServerEvent('jx:chest:remove', chestUUID)
+        
+        table.insert(options, { 
+            icon = "fas fa-trash-alt", 
+            label = "Remover Baú", 
+            action = function()
+                if lib.alertDialog({ 
+                    header = 'Remover Baú', 
+                    content = 'Tem certeza? O baú deve estar vazio.', 
+                    centered = true, 
+                    cancel = true 
+                }) == 'confirm' then
+                    if lib.progressBar({ 
+                        duration = Config.RemovalTime, 
+                        label = "Removendo baú...", 
+                        useWhileDead = false, 
+                        canCancel = true 
+                    }) then
+                        TriggerServerEvent('jx:chest:remove', chestUUID)
+                    end
                 end
-            end
-        end })
-    elseif not hasPermission then -- Opção para quem NÃO tem acesso
+            end 
+        })
+    elseif not hasPermission then
         table.insert(options, {
-            icon = "fas fa-user-secret", label = "Tentar Arrombar",
+            icon = "fas fa-user-secret", 
+            label = "Tentar Arrombar",
             action = function() TriggerServerEvent('jx:chest:requestLockpick', chestUUID) end
         })
     end
-
-    if #options > 0 then exports['rsg-target']:AddTargetEntity(entity, { options = options, distance = 2.0 }) end
+    
+    if #options > 0 then 
+        exports['rsg-target']:AddTargetEntity(entity, { options = options, distance = 2.0 }) 
+        return true
+    end
+    
+    return false
 end
 
 -- =================================================================
--- HANDLERS DE EVENTOS DE REDE
+-- EVENT HANDLERS OTIMIZADOS
 -- =================================================================
 
 RegisterNetEvent('chest:updateProps', function(propsFromServer)
     ClearAllProps()
     localProps = propsFromServer
+    
     for chestUUID, propData in pairs(localProps) do
         local propModel = joaat(propData.model)
-        RequestModel(propModel); while not HasModelLoaded(propModel) do Wait(10) end
-        local prop = CreateObject(propModel, propData.coords.x, propData.coords.y, propData.coords.z, false, false, false)
-        SetEntityHeading(prop, propData.heading or 0.0); FreezeEntityPosition(prop, true)
-        propEntities[chestUUID] = prop; AddTargetToProp(prop, chestUUID)
+        
+        if RequestModelSafe(propModel, 5000) then
+            local prop = CreateObject(propModel, propData.coords.x, propData.coords.y, propData.coords.z, false, false, false)
+            SetEntityHeading(prop, propData.heading or 0.0)
+            FreezeEntityPosition(prop, true)
+            
+            propEntities[chestUUID] = prop
+            AddTargetToProp(prop, chestUUID)
+        else
+            print(('[RSG-CHEST][ERROR] Falha ao carregar modelo para baú: %s'):format(chestUUID))
+        end
     end
 end)
 
 RegisterNetEvent('chest:createProp', function(chestUUID, propData)
-    if propEntities[chestUUID] and DoesEntityExist(propEntities[chestUUID]) then DeleteEntity(propEntities[chestUUID]) end
+    if propEntities[chestUUID] and DoesEntityExist(propEntities[chestUUID]) then 
+        SafeDeleteEntity(propEntities[chestUUID]) 
+    end
+    
     localProps[chestUUID] = propData
     local propModel = joaat(propData.model)
-    RequestModel(propModel); while not HasModelLoaded(propModel) do Wait(10) end
-    local prop = CreateObject(propModel, propData.coords.x, propData.coords.y, propData.coords.z, false, false, false)
-    SetEntityHeading(prop, propData.heading or 0.0); FreezeEntityPosition(prop, true)
-    propEntities[chestUUID] = prop; AddTargetToProp(prop, chestUUID)
+    
+    if RequestModelSafe(propModel, 5000) then
+        local prop = CreateObject(propModel, propData.coords.x, propData.coords.y, propData.coords.z, false, false, false)
+        SetEntityHeading(prop, propData.heading or 0.0)
+        FreezeEntityPosition(prop, true)
+        
+        propEntities[chestUUID] = prop
+        AddTargetToProp(prop, chestUUID)
+    end
 end)
 
 RegisterNetEvent('chest:removePropClient', function(chestUUID)
     if propEntities[chestUUID] and DoesEntityExist(propEntities[chestUUID]) then
-        pcall(function() exports['rsg-target']:RemoveTargetEntity(propEntities[chestUUID]) end)
-        DeleteEntity(propEntities[chestUUID])
+        SafeDeleteEntity(propEntities[chestUUID])
         propEntities[chestUUID], localProps[chestUUID] = nil, nil
     end
 end)
@@ -165,13 +282,17 @@ RegisterNetEvent('jx:chest:showShareMenu', function(chestUUID, nearbyPlayers)
         lib.notify({ type = 'warning', title = 'Aviso', description = 'Nenhum jogador próximo encontrado.' })
         return
     end
+
     local options = {}
     for _, player in ipairs(nearbyPlayers) do
         table.insert(options, {
-            title = player.label, description = "Compartilhar acesso com este jogador.", icon = "fas fa-user-plus",
+            title = player.label, 
+            description = "Compartilhar acesso com este jogador.", 
+            icon = "fas fa-user-plus",
             onSelect = function() TriggerServerEvent('jx:chest:share', chestUUID, player.value) end
         })
     end
+
     lib.registerContext({ id = 'chest_share_menu', title = 'Compartilhar Baú Com...', options = options })
     lib.showContext('chest_share_menu')
 end)
@@ -189,45 +310,115 @@ end)
 
 RegisterNetEvent('jx:chest:startSkillCheck', function(chestUUID)
     local playerPed = PlayerPedId()
+    
+    if not DoesEntityExist(playerPed) or not chestUUID then
+        print(('[RSG-CHEST][ERROR] Skill check: parâmetros inválidos'))
+        return
+    end
+    
     local rounds = Config.LockpickSettings.SkillCheck.Rounds
     local keys = Config.LockpickSettings.SkillCheck.Keys
     local animDict = "script_re@bear_trap"
     local animClip = "action_loot_player"
-
-    lib.playAnim(playerPed, animDict, animClip, 8.0, -8.0, -1, 1)
-
-    -- Verifica se a tabela de teclas foi definida e não está vazia
-    local skillCheckKeys = (keys and #keys > 0) and keys or nil
-    TaskPlayAnim(playerPed, animDict, animClip, 8.0, -8.0, -1, 1, 0, false, false, false)
-
-    -- ox_lib permite um único callback que retorna 'success' (true ou false)
-    local function onComplete(success)
-        --print(('Skill check %s for chest %s'):format(success and 'succeeded' or 'failed', chestUUID))
-        TriggerServerEvent('jx:chest:resolveLockpick', chestUUID, success)
-        StopAnimTask(playerPed, animDict, animClip, 1.0)
+    
+    -- Carrega animação com segurança
+    if not HasAnimDictLoaded(animDict) then
+        RequestAnimDict(animDict)
+        local timeout = GetGameTimer() + 5000
+        while not HasAnimDictLoaded(animDict) and GetGameTimer() < timeout do
+            Wait(50)
+        end
+        
+        if not HasAnimDictLoaded(animDict) then
+            print(('[RSG-CHEST][ERROR] Falha ao carregar animação: %s'):format(animDict))
+            return
+        end
     end
-
-    -- Inicia o skill check com os rounds e teclas customizadas
-    local success = lib.skillCheck(rounds, skillCheckKeys, onComplete)
-    if not success then
-        lib.notify({ type = 'error', title = 'Falha no Arrombamento', description = 'Você quebrou seu lockpick.' })
+    
+    TaskPlayAnim(playerPed, animDict, animClip, 8.0, -8.0, -1, 1, 0, false, false, false)
+    
+    -- Skill check com timeout
+    local function onComplete(success)
         StopAnimTask(playerPed, animDict, animClip, 1.0)
+        
+        if success then
+            lib.notify({ type = 'success', title = 'Sucesso', description = 'Você arrombou o baú!' })
+        else
+            lib.notify({ type = 'error', title = 'Falha no Arrombamento', description = 'Você quebrou seu lockpick.' })
+        end
+        
+        TriggerServerEvent('jx:chest:resolveLockpick', chestUUID, success)
+    end
+    
+    -- Timeout de segurança para o skill check
+    CreateThread(function()
+        Wait(30000) -- 30 segundos timeout
+        StopAnimTask(playerPed, animDict, animClip, 1.0)
+    end)
+    
+    local skillCheckKeys = (keys and #keys > 0) and keys or nil
+    lib.skillCheck(rounds, skillCheckKeys, onComplete)
+end)
 
-    else
-        lib.notify({ type = 'success', title = 'Sucesso', description = 'Você arrombou o baú!' })
-         TriggerServerEvent('jx:chest:resolveLockpick', chestUUID, success)
-         StopAnimTask(playerPed, animDict, animClip, 1.0)
+RegisterNetEvent('rsg-chest:client:startPlacement', function() 
+    if not _G.PlacementMode then StartPlacementMode() end 
+end)
 
+RegisterNetEvent('chest:opened', function(chestUUID) currentOpenChest = chestUUID end)
+
+RegisterNetEvent('inventory:client:closeInventory', function() 
+    if currentOpenChest then CloseCurrentChest() end 
+end)
+
+-- =================================================================
+-- EVENT HANDLERS MODERNIZADOS PARA RSG CORE
+-- =================================================================
+
+RegisterNetEvent('RSGCore:Client:OnPlayerLoaded', function()
+    PlayerData = RSGCore.Functions.GetPlayerData()
+    TriggerServerEvent('chest:requestAllProps')
+end)
+
+RegisterNetEvent('RSGCore:Client:OnPlayerUnload', function()
+    PlayerData = {}
+    ClearAllProps()
+    if currentOpenChest then CloseCurrentChest() end
+end)
+
+RegisterNetEvent('RSGCore:Player:SetPlayerData', function(val)
+    PlayerData = val
+end)
+
+-- =================================================================
+-- CLEANUP AUTOMÁTICO DE RECURSOS
+-- =================================================================
+
+CreateThread(function()
+    while true do
+        Wait(300000) -- 5 minutos
+        for model, _ in pairs(ModelCache) do
+            if HasModelLoaded(model) then
+                SetModelAsNoLongerNeeded(model)
+            end
+        end
+        ModelCache = {}
+        collectgarbage("collect")
+        print('[RSG-CHEST] Cache de modelos limpo automaticamente')
     end
 end)
 
-RegisterNetEvent('rsg-chest:client:startPlacement', function() if not _G.PlacementMode then StartPlacementMode() end end)
-RegisterNetEvent('chest:opened', function(chestUUID) currentOpenChest = chestUUID end)
-RegisterNetEvent('inventory:client:closeInventory', function() if currentOpenChest then CloseCurrentChest() end end)
-
--- =================================================================
--- HANDLERS DE EVENTOS DO JOGO E DO RESOURCE
--- =================================================================
-
-AddEventHandler('RSGCore:Client:OnPlayerLoaded', function() TriggerServerEvent('chest:requestAllProps') end)
-AddEventHandler('onResourceStop', function(resourceName) if GetCurrentResourceName() == resourceName then ClearAllProps(); if currentOpenChest then CloseCurrentChest() end end end)
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() == resourceName then
+        ClearAllProps()
+        if currentOpenChest then CloseCurrentChest() end
+        
+        -- Cleanup final
+        for model, _ in pairs(ModelCache) do
+            if HasModelLoaded(model) then
+                SetModelAsNoLongerNeeded(model)
+            end
+        end
+        
+        print('[RSG-CHEST] Recursos limpos na parada do resource')
+    end
+end)
