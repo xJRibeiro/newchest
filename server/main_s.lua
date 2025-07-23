@@ -680,7 +680,65 @@ RegisterNetEvent('jx:chest:resolveLockpick', function(chestUUID, success)
     end
 end)
 
+-- =================================================================
+-- EVENTO PARA TENTAR UPGRADE COM VERIFICAÇÃO DE ITEM
+-- =================================================================
 
+RegisterNetEvent('jx:chest:attemptUpgrade', function(chestUUID)
+    local src = source
+    local Player = RSGCore.Functions.GetPlayer(src)
+    
+    if not Player or not chestUUID or not props[chestUUID] then return end
+
+    local chest = props[chestUUID]
+    
+    -- Verifica se é o dono
+    if chest.owner ~= Player.PlayerData.citizenid then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = Config.Lang['no_permission'] 
+        })
+    end
+
+    -- Validação de distância
+    local playerCoords = GetEntityCoords(GetPlayerPed(src))
+    local chestCoords = vector3(chest.coords.x, chest.coords.y, chest.coords.z)
+    
+    if #(playerCoords - chestCoords) > 3.0 then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Erro', 
+            description = 'Você está muito longe do baú.' 
+        })
+    end
+
+    local currentTier = chest.tier or 1
+    local nextTier = currentTier + 1
+
+    if not Config.Tiers[nextTier] then
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'inform', 
+            title = 'Aviso', 
+            description = Config.Lang['max_tier_reached'] 
+        })
+    end
+
+    -- ✅ VERIFICA SE TEM O ITEM DE UPGRADE
+    local hasUpgradeItem = exports['rsg-inventory']:GetItemByName(src, Config.UpgradeItem)
+    if not hasUpgradeItem or hasUpgradeItem.amount < 1 then
+        local itemLabel = GetItemLabel(Config.UpgradeItem)
+        return TriggerClientEvent('ox_lib:notify', src, { 
+            type = 'error', 
+            title = 'Item Necessário', 
+            description = ('Você precisa de um %s para melhorar este baú.'):format(itemLabel)
+        })
+    end
+
+    -- Confirma se quer usar o item
+    local itemLabel = GetItemLabel(Config.UpgradeItem)
+    TriggerClientEvent('jx:chest:confirmUpgrade', src, chestUUID, hasUpgradeItem.amount, itemLabel)
+end)
 -- =================================================================
 -- EVENTO PARA RENOMEAR BAÚ
 -- =================================================================

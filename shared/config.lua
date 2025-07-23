@@ -6,7 +6,7 @@ Config.ChestProp = 'p_chest01x'
 Config.MaxDistance = 2.0
 Config.PlacementDistance = 5.0
 Config.ShareDistance = 5.0 -- Distância máxima em metros para poder compartilhar.
-Config.UpgradeItem = 'canteen0'-- 'chest_upgrade_kit' -- Item usado para melhorar o baú.
+Config.UpgradeItem = 'chest_upgrade_kit'-- 'chest_upgrade_kit' -- Item usado para melhorar o baú.
 Config.LockpickItem = 'lockpick'          -- Item usado para tentar arrombar baús.
 Config.Tiers = {
     -- Nível 1 (Padrão)
