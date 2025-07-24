@@ -1,5 +1,6 @@
 personal_chest = { name = 'personal_chest', label = 'Personal Chest', weight = 100, type = 'item', image = 'personal_chest.png', unique = true, useable = true, shouldClose = true, description = 'A personal chest for storing items' },
 upgrade_chest_kit = { name = 'upgrade_chest_kit', label = 'Upgrade Chest Kit', weight = 100, type = 'item', image = 'upgrade_chest_kit.png', unique = true, useable = true, shouldClose = true, description = 'Used to upgrade your personal chest' },
 lockpick = { name = 'lockpick', label = 'Lockpick', weight = 100, type = 'item', image = 'lockpick.png', unique = true, useable = true, shouldClose = true, description = 'Used to pick locks on chests' },
-repair_kit = { name = 'repair_kit', label = 'Repair Kit', weight = 100, type = 'item', image = 'repair_kit.png', unique = true, useable = true, shouldClose = true, description = 'Used to repair your personal chest' },
-    
+repair_kit_basic = { name = 'repair_kit_basic', label = 'Repair Kit', weight = 100, type = 'item', image = 'repair_kit_basic.png', unique = true, useable = true, description = 'Used to repair your personal chest' },
+repair_kit_advanced = { name = 'repair_kit_advanced', label = 'Repair Kit', weight = 100, type = 'item', image = 'repair_kit_advanced.png', unique = true, useable = true, description = 'USed to repair your personal chest' },
+repair_kit_master = { name = 'repair_kit_master', label = 'Repair Kit', weight = 100, type = 'item', image = 'repair_kit_master.png', unique = true, useable = true, description = 'Used to repair your personal chest' },

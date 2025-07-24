@@ -692,7 +692,7 @@ end)
 
 -- Configurações de durabilidade
 local DurabilitySettings = {
-    degradationInterval = 10000, --1800000, -- 30 minutos em ms
+    degradationInterval = 3600000,  -- 60 minutos em ms
     baseDecay = 1, -- Perda base por intervalo
     tierMultipliers = {
         [1] = 1.5, -- Tier 1 perde mais rápido
@@ -711,7 +711,7 @@ local DurabilitySettings = {
 -- Thread para degradação de durabilidade
 CreateThread(function()
     while true do
-        Wait(DurabilitySettings.degradationInterval)
+        Wait(3600000)
         
         print('[RSG-CHEST] Iniciando ciclo de degradação de durabilidade...')
         
@@ -800,7 +800,7 @@ RegisterNetEvent('jx:chest:repairChest', function(chestUUID, repairType)
     -- Define item e quantidade de reparo baseado no tipo
     local repairItem, repairAmount
     if repairType == 'basic' then
-        repairItem = 'repair_kit' --'repair_kit_basic'
+        repairItem = 'repair_kit_basic'
         repairAmount = DurabilitySettings.repairAmounts.basic
     elseif repairType == 'advanced' then
         repairItem = 'repair_kit_advanced'
